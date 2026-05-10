@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+.git/
+.DS_Store
+videos_input/
+data/visits/
+*.mp4
+*.mov

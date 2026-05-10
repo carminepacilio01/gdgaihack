@@ -1,0 +1,435 @@
+{% extends "base.html" %}
+{% block title %}{{ card.patient_id }} — {ParC}{% endblock %}
+
+{% block body %}
+<div class="page">
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px;">
+    <div>
+      <a href="{{ url_for('dashboard') }}" style="color:rgba(255,255,255,0.78);font-size:0.85rem;font-weight:700;">&larr; All patients</a>
+      <h1 class="page-title" style="margin-top:6px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        {{ card.patient_id }}
+        {% if card.patient_num %}<span style="font-family:Menlo,monospace;font-size:0.85rem;color:rgba(255,255,255,0.55);font-weight:400;">#{{ card.patient_num }}</span>{% endif %}
+        {% if card.label == 1 %}<span class="pd-tag pd">PD</span>
+        {% elif card.label == 0 %}<span class="pd-tag healthy">no PD</span>
+        {% else %}<span class="pd-tag unknown">unlabeled</span>{% endif %}
+      </h1>
+      <p class="page-subtitle">
+        {% if card.sex == 0 %}♂ Male{% elif card.sex == 1 %}♀ Female{% else %}— sex{% endif %} ·
+        {% if card.age %}{{ card.age }} years{% else %}— age{% endif %} ·
+        {{ card.n_visits }} visit{% if card.n_visits != 1 %}s{% endif %} ·
+        {% if card.has_baseline %}<span style="color:#34d399;">● Baseline OK</span>{% else %}<span style="color:#fbbf24;">○ No baseline</span>{% endif %}
+      </p>
+    </div>
+    <div style="display:flex;gap:10px;flex-shrink:0;">
+      <a href="/patient/{{ card.patient_id }}/report.pdf" class="btn btn-ghost" target="_blank" rel="noopener">PDF report</a>
+      <a href="/patient/{{ card.patient_id }}/log.csv" class="btn btn-ghost">CSV log</a>
+      <button class="btn btn-primary" id="btn-new-visit">＋ New visit</button>
+    </div>
+  </div>
+
+  <div id="rec-banner" class="rec-banner" style="display:none;"></div>
+
+  {% if visits %}
+  <!-- AI screening report box — runs inference + Ollama on demand -->
+  <div class="ai-report-card">
+    <div class="ai-report-head">
+      <h3>
+        <span class="ai-pulse"></span>
+        AI Screening Report
+        <span class="ai-tag">TCN classifier · Ollama explanation</span>
+      </h3>
+      <div class="ai-controls">
+        <select id="ai-visit-select">
+          {% for v in visits[:10] %}
+          <option value="{{ v.visit_id }}">{{ v.visit_id }} — {{ v.state or 'visit' }}</option>
+          {% endfor %}
+        </select>
+        <button id="btn-ai-report" class="btn btn-primary">
+          ⚡ Generate report
+        </button>
+      </div>
+    </div>
+    <div id="ai-report-body" class="ai-report-body ai-report-empty">
+      <p>Pick a visit and click <strong>Generate report</strong> to run the TCN classifier and the Ollama-backed clinical explanation. Results combine the model's PD probability, top tremor regions, and a plain-language report for the clinician.</p>
+    </div>
+  </div>
+
+  <section class="stat-strip">
+    <div class="stat">
+      <div class="stat-label">Last blink rate</div>
+      <div class="stat-value">{% if card.last_blink is not none %}{{ "%.1f"|format(card.last_blink) }}<span style="font-size:0.85rem;color:rgba(255,255,255,0.65);font-weight:400;"> /min</span>{% else %}—{% endif %}</div>
+      <div class="stat-sub">norm: 15–22 /min</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Last smile</div>
+      <div class="stat-value">{% if card.last_smile is not none %}{{ "%.1f"|format(card.last_smile) }}<span style="font-size:0.85rem;color:rgba(255,255,255,0.65);font-weight:400;"> mm</span>{% else %}—{% endif %}</div>
+      <div class="stat-sub">norm: 35–60 mm</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Last asymmetry</div>
+      <div class="stat-value">{% if card.last_asym is not none %}{{ "%.3f"|format(card.last_asym) }}{% else %}—{% endif %}</div>
+      <div class="stat-sub">norm: &lt; 0.05</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">PD likelihood</div>
+      <div class="stat-value">{% if card.last_pd is not none %}{{ "%.1f"|format(card.last_pd) }}<span style="font-size:0.85rem;color:rgba(255,255,255,0.65);font-weight:400;"> %</span>{% else %}—{% endif %}</div>
+      <div class="stat-sub">tremor classifier</div>
+    </div>
+  </section>
+
+  <div class="card" style="grid-column: 1 / -1;">
+    <h2><span style="color:var(--parc-cyan);">●</span> Visits ({{ card.n_visits }})</h2>
+    <p class="card-sub">All recorded sessions for {{ card.patient_id }}, newest first.</p>
+    <table class="visits-table">
+      <thead>
+        <tr>
+          <th>Visit ID</th>
+          <th>State</th>
+          <th>Recorded</th>
+          <th>Frames</th>
+          <th>Blink</th>
+          <th>Smile mm</th>
+          <th>Asym</th>
+          <th>PD%</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for v in visits %}
+        {% set m = v.metrics or {} %}
+        <tr>
+          <td style="font-family:Menlo,monospace;font-size:0.78rem;">{{ v.visit_id }}</td>
+          <td>
+            {% set st = v.state or 'visit' %}
+            <span class="pill pill-{{ st }}">{{ st }}</span>
+          </td>
+          <td style="color:var(--parc-card-fg-muted);">{{ (v.recorded_at or '')|replace('T', ' ') }}</td>
+          <td>{{ v.n_frames or '—' }}</td>
+          <td>{% if m.blink_rate %}{{ "%.1f"|format(m.blink_rate.mean) }}{% else %}—{% endif %}</td>
+          <td>{% if m.smile_amplitude_mm %}{{ "%.1f"|format(m.smile_amplitude_mm.mean) }}{% else %}—{% endif %}</td>
+          <td>{% if m.asymmetry %}{{ "%.3f"|format(m.asymmetry.mean) }}{% else %}—{% endif %}</td>
+          <td>{% if m.tremor_chin_pd_likelihood %}{{ "%.1f"|format(m.tremor_chin_pd_likelihood.mean) }}{% else %}—{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card" style="text-align:center;padding:48px;">
+    <h2 style="justify-content:center;">No visits for {{ card.patient_id }}</h2>
+    <p class="card-sub">Click <strong>＋ New visit</strong> above to record the first one.</p>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Visit modal pre-filled with patient context -->
+<div id="visit-modal" class="modal-mask">
+  <div class="modal">
+    <h2>New visit for {{ card.patient_id }}</h2>
+    <p class="subtitle">60 s recording on the OAK 4 D, on-device.</p>
+    <input id="vm-patient" type="hidden" value="{{ card.patient_id }}">
+    <div class="row2">
+      <div><label>Sex</label>
+        <select id="vm-sex">
+          <option value="">—</option>
+          <option value="0" {% if card.sex == 0 %}selected{% endif %}>M</option>
+          <option value="1" {% if card.sex == 1 %}selected{% endif %}>F</option>
+        </select>
+      </div>
+      <div><label>Age</label>
+        <input id="vm-age" type="number" min="1" max="120" value="{{ card.age or '' }}">
+      </div>
+    </div>
+    <div class="row2">
+      <div><label>Reference label</label>
+        <select id="vm-label">
+          <option value="">— unknown</option>
+          <option value="0" {% if card.label == 0 %}selected{% endif %}>No Parkinson</option>
+          <option value="1" {% if card.label == 1 %}selected{% endif %}>Parkinson</option>
+        </select>
+      </div>
+      <div><label>Duration (s)</label>
+        <input id="vm-duration" type="number" min="10" max="600" value="60">
+      </div>
+    </div>
+    <div class="actions">
+      <button id="vm-cancel" class="btn">Cancel</button>
+      <button id="vm-start" class="btn btn-primary">● Start recording</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+.ai-report-card {
+  background: rgba(255,255,255,0.10);
+  backdrop-filter: blur(12px);
+  border: 1.5px solid rgba(255,255,255,0.20);
+  border-radius: 1.25rem;
+  padding: 22px 26px;
+  margin-bottom: 22px;
+  color: white;
+}
+.ai-report-head {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  flex-wrap: wrap; gap: 14px; margin-bottom: 14px;
+}
+.ai-report-head h3 {
+  font-family: var(--font-serif); font-weight: 900; font-size: 1.1rem;
+  display: flex; align-items: center; gap: 10px;
+}
+.ai-pulse {
+  display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--parc-cyan);
+  box-shadow: 0 0 0 0 rgba(0,212,232,0.6);
+  animation: ai-pulse 1.6s infinite;
+}
+@keyframes ai-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(0,212,232,0.55); }
+  70% { box-shadow: 0 0 0 10px rgba(0,212,232,0); }
+  100% { box-shadow: 0 0 0 0 rgba(0,212,232,0); }
+}
+.ai-tag {
+  font-family: var(--font-serif); font-weight: 400; font-size: 0.78rem;
+  color: rgba(255,255,255,0.65); margin-left: 8px;
+}
+.ai-controls {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+}
+.ai-controls select {
+  background: rgba(255,255,255,0.10);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.30);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-family: Menlo, monospace; font-size: 0.78rem;
+  outline: none;
+}
+.ai-controls select option { background: var(--parc-blue-deep); color: white; }
+.ai-report-body {
+  background: rgba(0,0,0,0.18);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  padding: 18px 20px;
+  font-family: var(--font-serif);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  min-height: 100px;
+}
+.ai-report-empty p { color: rgba(255,255,255,0.65); margin: 0; }
+.ai-report-body .ai-grid {
+  display: grid; grid-template-columns: 220px 1fr; gap: 22px;
+  align-items: start;
+}
+.ai-report-body .ai-grid .left { padding: 8px 4px; }
+.ai-report-body .ai-grid .ring-mini {
+  position: relative; width: 140px; height: 140px; margin: 0 auto 8px;
+}
+.ai-report-body .ai-grid .ring-mini svg { width: 100%; height: 100%; }
+.ai-report-body .ai-grid .ring-mini .ctr {
+  position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; font-family: var(--font-serif); font-weight: 900;
+  font-size: 1.7rem; color: white;
+}
+.ai-report-body .label-line {
+  text-align: center; font-family: var(--font-serif);
+  font-size: 0.92rem; font-weight: 900; margin-top: 4px;
+}
+.ai-report-body .label-line.pd { color: #ff8a8a; }
+.ai-report-body .label-line.healthy { color: #6ef0a0; }
+.ai-report-body .right h4 {
+  font-size: 0.7rem; font-family: var(--font-serif); font-weight: 900;
+  color: var(--parc-cyan); text-transform: uppercase; letter-spacing: 0.10em;
+  margin: 0 0 8px;
+}
+.ai-report-body .top-region {
+  background: rgba(255,255,255,0.06); border-radius: 8px;
+  padding: 8px 12px; margin-bottom: 6px;
+  font-size: 0.85rem; line-height: 1.45;
+}
+.ai-report-body .top-region strong { color: var(--parc-cyan); }
+.ai-report-body .explanation {
+  margin-top: 14px;
+  padding: 16px 20px;
+  background: rgba(0, 212, 232, 0.06);
+  border-left: 3px solid var(--parc-cyan);
+  border-radius: 8px;
+  font-family: var(--font-serif);
+  font-size: 0.92rem; line-height: 1.6;
+  color: rgba(255,255,255,0.95);
+}
+.ai-report-body .explanation p { margin: 0 0 0.75em 0; }
+.ai-report-body .explanation p:last-child { margin-bottom: 0; }
+.ai-report-body .explanation ul {
+  margin: 0.4em 0 0.75em 0;
+  padding-left: 1.2em;
+}
+.ai-report-body .explanation li {
+  margin: 0.25em 0;
+}
+.ai-report-body .explanation strong {
+  color: var(--parc-cyan);
+  font-weight: 700;
+}
+.ai-report-body .explanation code {
+  background: rgba(0,0,0,0.25);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: Menlo, monospace;
+  font-size: 0.85em;
+  color: rgba(255,255,255,0.9);
+}
+.ai-report-body.error {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+</style>
+
+<script>
+async function runAiReport() {
+  const sel = document.getElementById("ai-visit-select");
+  const vid = sel.value;
+  const body = document.getElementById("ai-report-body");
+  const btn = document.getElementById("btn-ai-report");
+  body.classList.remove("error", "ai-report-empty");
+  body.innerHTML = `<p style="color: rgba(255,255,255,0.85);"><span class="ai-pulse"></span>&nbsp; Running TCN inference + Ollama explanation… (~5–15 s)</p>`;
+  btn.disabled = true;
+  let resp;
+  try {
+    resp = await fetch(`/api/patient/${encodeURIComponent("{{ patient_id }}")}/visit/${encodeURIComponent(vid)}/ai_report`, {method: "POST"});
+  } catch (e) {
+    btn.disabled = false;
+    body.classList.add("error");
+    body.innerText = "Network error: " + e.message;
+    return;
+  }
+  btn.disabled = false;
+  const data = await resp.json();
+  if (!resp.ok) {
+    body.classList.add("error");
+    body.innerHTML = `<strong>Error:</strong> ${data.error || resp.status}` +
+      (data.stderr_tail ? `<pre style="font-family:Menlo,monospace;font-size:11px;margin-top:8px;color:rgba(255,255,255,0.6);white-space:pre-wrap;">${data.stderr_tail}</pre>` : "");
+    return;
+  }
+  renderAiReport(data, body);
+}
+
+// Tiny markdown→HTML for clinical reports. Handles: paragraphs, bullets,
+// **bold**, `code`, plus decoding stray \uXXXX escapes from the LLM.
+function renderClinicalText(raw) {
+  if (!raw) return "";
+  let s = String(raw);
+  // Decode literal \uXXXX produced by the model (e.g. "—" → em-dash)
+  s = s.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+  // HTML-escape first, before injecting our own tags
+  s = s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Inline: **bold** and `code`
+  s = s.replace(/\*\*([^*\n]+?)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/`([^`\n]+?)`/g, "<code>$1</code>");
+  // Block: split into lines, group bullets into <ul>, others into <p>
+  const lines = s.split(/\r?\n/);
+  let out = ""; let inList = false; let buf = [];
+  const flushPara = () => {
+    if (buf.length) {
+      out += "<p>" + buf.join(" ").trim() + "</p>";
+      buf = [];
+    }
+  };
+  for (const line of lines) {
+    const m = line.match(/^\s*[-*]\s+(.*)$/);
+    if (m) {
+      flushPara();
+      if (!inList) { out += "<ul>"; inList = true; }
+      out += "<li>" + m[1].trim() + "</li>";
+    } else if (line.trim() === "") {
+      flushPara();
+      if (inList) { out += "</ul>"; inList = false; }
+    } else {
+      if (inList) { out += "</ul>"; inList = false; }
+      buf.push(line.trim());
+    }
+  }
+  flushPara();
+  if (inList) out += "</ul>";
+  return out;
+}
+
+function renderAiReport(d, container) {
+  const pred = d.prediction || {};
+  const fi = d.feature_importance || {};
+  const pdProb = pred.pd_probability ?? 0;
+  const labelStr = pred.label || "—";
+  const conf = pred.confidence_pct ?? 0;
+  const pdPct = Math.round(pdProb * 100);
+  const isPD = labelStr === "Parkinson";
+  const stroke = isPD ? "#ff5470" : "#6ef0a0";
+  const circumference = 2 * Math.PI * 52;
+  const dashOffset = circumference * (1 - pdProb);
+  const top = fi.top_tremor_regions || [];
+  const explanation = d.explanation_text || (d.agent_error
+    ? `Ollama explanation unavailable: ${d.agent_error}`
+    : "");
+  container.innerHTML = `
+    <div class="ai-grid">
+      <div class="left">
+        <div class="ring-mini">
+          <svg viewBox="0 0 120 120">
+            <circle cx="60" cy="60" r="52" stroke="rgba(255,255,255,0.12)" stroke-width="14" fill="none"/>
+            <circle cx="60" cy="60" r="52" stroke="${stroke}" stroke-width="14" fill="none"
+                    stroke-linecap="round" transform="rotate(-90 60 60)"
+                    stroke-dasharray="${circumference}" stroke-dashoffset="${dashOffset}"/>
+          </svg>
+          <div class="ctr">${pdPct}%</div>
+        </div>
+        <div class="label-line ${isPD ? "pd" : "healthy"}">${labelStr}</div>
+        <div style="text-align:center;font-size:0.78rem;color:rgba(255,255,255,0.65);margin-top:4px;font-family:var(--font-serif);">
+          confidence ${conf.toFixed(1)}%
+        </div>
+        <div style="text-align:center;font-size:0.7rem;color:rgba(255,255,255,0.45);margin-top:8px;font-family:Menlo,monospace;">
+          ${(d.inference_time_ms ?? 0).toFixed(1)} ms · ${d.preprocessing?.frames_used ?? "?"} frames
+        </div>
+      </div>
+      <div class="right">
+        <h4>Top tremor regions (3–7 Hz band)</h4>
+        ${top.slice(0,3).map(t => `
+          <div class="top-region">
+            <strong>${t.region}</strong> · ratio ${t.tremor_band_ratio.toFixed(3)} · ${t.dominant_freq_hz.toFixed(1)} Hz<br>
+            <span style="color:rgba(255,255,255,0.65);">${t.interpretation}</span>
+          </div>
+        `).join("")}
+        ${fi.decision_note ? `<div style="margin-top:10px;font-size:0.85rem;color:rgba(255,255,255,0.85);font-style:italic;">${fi.decision_note}</div>` : ""}
+        ${explanation ? `
+          <h4 style="margin-top:18px;">Clinical explanation (Ollama qwen2.5:0.5B)</h4>
+          <div class="explanation">${renderClinicalText(explanation)}</div>
+        ` : ""}
+      </div>
+    </div>
+  `;
+}
+const _btnAi = document.getElementById("btn-ai-report");
+if (_btnAi) {
+  _btnAi.addEventListener("click", () => {
+    console.log("[ai-report] button clicked, visit:", document.getElementById("ai-visit-select").value);
+    runAiReport();
+  });
+  console.log("[ai-report] listener attached");
+} else {
+  console.warn("[ai-report] btn-ai-report not in DOM (no visits for this patient?)");
+}
+
+const visitModal = document.getElementById("visit-modal");
+document.getElementById("btn-new-visit").addEventListener("click", () => visitModal.classList.add("show"));
+document.getElementById("vm-cancel").addEventListener("click", () => visitModal.classList.remove("show"));
+document.getElementById("vm-start").addEventListener("click", () => {
+  const params = new URLSearchParams({
+    duration: document.getElementById("vm-duration").value || "60",
+    sex: document.getElementById("vm-sex").value,
+    age: document.getElementById("vm-age").value,
+    label: document.getElementById("vm-label").value,
+  });
+  const patient = document.getElementById("vm-patient").value;
+  window.location.href = `/session/${encodeURIComponent(patient)}?${params}`;
+});
+</script>
+{% endblock %}

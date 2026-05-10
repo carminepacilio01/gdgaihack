@@ -1,0 +1,12 @@
+depthai>=3.4.0
+depthai-nodes>=0.3.6
+opencv-python-headless
+numpy
+flask
+plotly
+reportlab
+# Voice analysis (host-side, optional — pipeline runs without them via --no_voice)
+sounddevice
+soundfile
+praat-parselmouth
+openai-whisper

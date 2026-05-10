@@ -1,14 +1,40 @@
-# Agent runtime — what `parkinson_agent/` actually needs.
+# {ParC} — full stack requirements (gdgaihack monorepo)
+# Python 3.9.6 (system / Apple CommandLineTools) is the supported interpreter.
+# Install with: /usr/bin/python3 -m pip install --user -r requirements.txt
+
+# ─── Agent runtime (parkinson_agent/) ────────────────────────────────
 ollama>=0.4.0
 pydantic>=2.7
 
-# Upstream pipeline (`models/generate_knowledge.py`) — CSV → data.json.
+# ─── Upstream model pipeline (models/) ───────────────────────────────
 numpy>=1.26
 scipy>=1.11
 pandas>=2.0
+torch>=2.0
+scikit-learn>=1.3
+tqdm>=4.65
+onnxruntime>=1.16
 
-# Testing
-pytest>=8.0
+# ─── OAK acquisition pipeline (neurosight/) ──────────────────────────
+depthai>=3.4.0
+depthai-nodes>=0.3.6
+opencv-python-headless
 
-# Demo UI (only needed if you run the Streamlit clinician view)
+# ─── Backend tech dashboard (neurosight/backend/) ────────────────────
+flask>=3.0.0
+reportlab>=4.0
+requests>=2.31
+markdown>=3.5
+plotly>=5.18
+
+# ─── Voice analysis (optional, host-side; off when --no_voice) ───────
+sounddevice>=0.4
+soundfile>=0.12
+praat-parselmouth>=0.4
+openai-whisper>=20231117
+
+# ─── Clinician UI (Streamlit) ────────────────────────────────────────
 streamlit>=1.32
+
+# ─── Testing ─────────────────────────────────────────────────────────
+pytest>=8.0

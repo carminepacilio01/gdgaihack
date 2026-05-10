@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}{ParC} — Clinician Portal{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+  <div class="parc-bg">
+    <div class="topbar">
+      <a href="{{ url_for('dashboard') }}" class="logo-wrap" aria-label="ParC home">
+        <img src="{{ url_for('static', filename='img/logo.png') }}" alt="{ParC} logo" class="logo-img">
+      </a>
+      <span class="brand">{ParC}</span>
+      <div class="topbar-right">
+        <a href="{{ url_for('dashboard') }}" class="topbar-link">Patients</a>
+        <a href="http://localhost:8082" target="_blank" rel="noopener" class="topbar-link">Live camera ↗</a>
+        <a href="http://localhost:8080" target="_blank" rel="noopener" class="topbar-link">Tech ↗</a>
+      </div>
+    </div>
+
+    {% block body %}{% endblock %}
+  </div>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

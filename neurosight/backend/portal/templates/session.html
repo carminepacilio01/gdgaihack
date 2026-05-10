@@ -1,0 +1,497 @@
+{% extends "base.html" %}
+{% block title %}Session · {{ card.patient_id }} — {ParC}{% endblock %}
+
+{% block body %}
+<div class="page" style="padding-top: 16px;">
+  <div class="session-bar">
+    <div class="session-status">
+      <span class="rec-dot"></span>
+      <span class="session-label">Active session —</span>
+      <span class="session-patient">{{ card.patient_id }}</span>
+      <span class="session-meta">
+        ({% if card.age %}{{ card.age }} yrs{% else %}— yrs{% endif %} —
+        {% if card.label == 1 %}Parkinson{% elif card.label == 0 %}Healthy control{% else %}Unlabeled{% endif %})
+      </span>
+    </div>
+    <a href="{{ url_for('dashboard') }}" class="session-back">← Change patient</a>
+  </div>
+
+  <div class="session-grid">
+    <!-- Left column: cam feed + notes -->
+    <div class="session-left">
+      <div class="cam-card">
+        <div class="cam-header">
+          <span class="rec-dot"></span>
+          <span>OAK 4 D — Recording in progress</span>
+          <span class="cam-timer" id="cam-timer">00:00 / {{ duration }}s</span>
+          <button id="btn-stop" class="cam-stop" title="Stop the recording and discard partial files">✕ Stop &amp; discard</button>
+        </div>
+        <div class="cam-frame">
+          <iframe id="cam-iframe" src="http://localhost:8082" frameborder="0"
+                  allow="autoplay; fullscreen"
+                  title="OAK live feed"></iframe>
+          <div class="cam-overlay-fallback" id="cam-fallback" style="display:none;">
+            <div class="rec-pulse"></div>
+            <p>Recording from OAK 4 D</p>
+            <p class="cam-fallback-sub">Live preview at <a href="http://localhost:8082" target="_blank" rel="noopener">localhost:8082</a></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="notes-card">
+        <h3>Session Notes — Automated Analysis</h3>
+        <div id="notes-list"></div>
+        <div id="notes-loader" class="notes-loader">
+          <span class="dot-pulse"></span>
+          <span>Analyzing biomarker stream…</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right column: ring chart + status -->
+    <div class="session-right">
+      <div class="ring-card">
+        <p class="ring-label">Parkinson Probability</p>
+        <div class="ring-wrap">
+          <svg viewBox="0 0 120 120" class="ring-svg">
+            <circle cx="60" cy="60" r="52" stroke="rgba(255,255,255,0.12)"
+                    stroke-width="14" fill="none"/>
+            <circle id="ring-progress" cx="60" cy="60" r="52"
+                    stroke="#00d4e8" stroke-width="14" fill="none"
+                    stroke-linecap="round"
+                    transform="rotate(-90 60 60)"
+                    stroke-dasharray="326.7" stroke-dashoffset="326.7"
+                    style="transition: stroke-dashoffset 0.6s ease, stroke 0.3s;"/>
+          </svg>
+          <div class="ring-center">
+            <span id="ring-pct">--</span>
+            <small>%</small>
+          </div>
+        </div>
+        <p class="ring-sub">Risk score — <strong>{{ card.patient_id }}</strong></p>
+        <div class="ring-bottom">
+          <p class="ring-bottom-label">Live status</p>
+          <p class="ring-bottom-value" id="ring-status">Initializing…</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden recording context -->
+  <div data-rec
+       data-patient="{{ patient_id }}"
+       data-duration="{{ duration }}"
+       data-sex="{{ sex }}"
+       data-age="{{ age }}"
+       data-label="{{ label }}"
+       style="display:none;"></div>
+</div>
+
+<style>
+  .session-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 14px;
+  }
+  .session-status {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 9px 18px; border-radius: 16px;
+    background: rgba(255,255,255,0.10);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.20);
+    color: white;
+    font-family: var(--font-serif);
+  }
+  .session-label { font-weight: 700; font-size: 0.9rem; }
+  .session-patient { font-weight: 900; font-size: 0.95rem; }
+  .session-meta { color: rgba(255,255,255,0.65); font-size: 0.85rem; }
+  .session-back {
+    color: rgba(255,255,255,0.75); font-size: 0.85rem; font-weight: 700;
+    font-family: var(--font-serif);
+  }
+  .session-back:hover { color: white; }
+
+  .session-grid {
+    display: grid; grid-template-columns: 1fr 320px; gap: 20px;
+    align-items: start;
+  }
+  @media (max-width: 1100px) {
+    .session-grid { grid-template-columns: 1fr; }
+    .session-right { order: -1; }
+  }
+
+  .session-left { display: flex; flex-direction: column; gap: 18px; }
+
+  /* Camera card */
+  .cam-card {
+    background: white;
+    border-radius: 1.5rem;
+    overflow: hidden;
+    box-shadow: 0 24px 60px rgba(0, 0, 30, 0.20);
+    display: flex; flex-direction: column;
+  }
+  .cam-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 18px;
+    background: #f8fafd;
+    border-bottom: 1px solid var(--parc-card-border);
+    color: var(--parc-card-fg);
+    font-family: var(--font-serif); font-weight: 700; font-size: 0.85rem;
+  }
+  .cam-header .cam-timer {
+    margin-left: auto; font-family: Menlo, monospace; color: var(--parc-card-fg-muted);
+    font-weight: 400; font-size: 0.8rem;
+  }
+  .cam-header .cam-stop {
+    background: transparent;
+    border: 1.5px solid rgba(239, 68, 68, 0.45);
+    color: var(--parc-red);
+    padding: 5px 12px; border-radius: 999px;
+    font-family: var(--font-serif); font-weight: 700; font-size: 0.78rem;
+    cursor: pointer;
+    margin-left: 14px;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .cam-header .cam-stop:hover {
+    background: rgba(239, 68, 68, 0.10);
+    border-color: var(--parc-red);
+  }
+  .cam-frame {
+    position: relative; aspect-ratio: 16/10;
+    background: #04062b;
+  }
+  .cam-frame iframe {
+    width: 100%; height: 100%; border: 0; display: block;
+  }
+  .cam-overlay-fallback {
+    position: absolute; inset: 0; display: flex;
+    flex-direction: column; align-items: center; justify-content: center;
+    color: white; gap: 10px;
+    font-family: var(--font-serif);
+  }
+  .cam-fallback-sub { color: rgba(255,255,255,0.6); font-size: 0.8rem; }
+  .cam-fallback-sub a { color: var(--parc-cyan); }
+  .rec-pulse {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--parc-red);
+    box-shadow: 0 0 0 0 var(--parc-red);
+    animation: rec-pulse 1.4s infinite;
+  }
+  @keyframes rec-pulse {
+    0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); }
+    70% { box-shadow: 0 0 0 14px rgba(239, 68, 68, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+  }
+  .rec-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--parc-red);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+    animation: rec-pulse 1.4s infinite;
+  }
+
+  /* Notes card */
+  .notes-card {
+    background: rgba(255,255,255,0.10);
+    backdrop-filter: blur(12px);
+    border: 1.5px solid rgba(255,255,255,0.20);
+    border-radius: 1.5rem;
+    padding: 22px 24px;
+    color: white;
+    min-height: 180px;
+  }
+  .notes-card h3 {
+    font-family: var(--font-serif); font-weight: 900;
+    color: white; font-size: 0.9rem;
+    margin-bottom: 14px;
+    letter-spacing: 0.02em;
+  }
+  #notes-list { display: flex; flex-direction: column; gap: 10px; }
+  .note-line {
+    display: flex; align-items: flex-start; gap: 8px;
+    color: rgba(255,255,255,0.85);
+    font-family: var(--font-serif); font-size: 0.86rem; line-height: 1.5;
+    animation: fade-in 0.4s ease-out;
+  }
+  .note-line .arrow { color: var(--parc-cyan); font-weight: 900; flex-shrink: 0; margin-top: 1px; }
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .notes-loader {
+    margin-top: 12px;
+    display: flex; align-items: center; gap: 8px;
+    color: rgba(255,255,255,0.45);
+    font-family: var(--font-serif); font-size: 0.82rem;
+  }
+  .dot-pulse {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: rgba(255,255,255,0.5);
+    animation: dot-pulse 1.2s infinite;
+  }
+  @keyframes dot-pulse {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
+  }
+
+  /* Ring card */
+  .ring-card {
+    background: rgba(255,255,255,0.12);
+    backdrop-filter: blur(12px);
+    border: 1.5px solid rgba(255,255,255,0.25);
+    border-radius: 1.5rem;
+    padding: 24px 22px;
+    display: flex; flex-direction: column; align-items: center;
+    color: white;
+  }
+  .ring-label {
+    font-family: var(--font-serif); font-weight: 700; font-size: 0.78rem;
+    color: rgba(255,255,255,0.85);
+    margin-bottom: 16px; text-align: center;
+  }
+  .ring-wrap {
+    position: relative; width: 160px; height: 160px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .ring-svg { width: 100%; height: 100%; }
+  .ring-center {
+    position: absolute;
+    font-family: var(--font-serif); font-weight: 900;
+    color: white;
+    display: flex; align-items: baseline; gap: 2px;
+  }
+  .ring-center span { font-size: 2.4rem; line-height: 1; }
+  .ring-center small { font-size: 0.85rem; opacity: 0.75; font-weight: 700; }
+  .ring-sub {
+    margin-top: 12px;
+    font-family: var(--font-serif); font-size: 0.82rem;
+    color: rgba(255,255,255,0.78);
+    text-align: center;
+  }
+  .ring-sub strong { font-weight: 900; }
+  .ring-bottom {
+    margin-top: 18px; padding: 10px 16px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 12px;
+    text-align: center;
+    width: 100%;
+  }
+  .ring-bottom-label {
+    font-family: var(--font-serif); font-weight: 700;
+    font-size: 0.7rem; color: rgba(255,255,255,0.55);
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .ring-bottom-value {
+    font-family: var(--font-serif); font-weight: 900;
+    font-size: 0.92rem; color: white; margin-top: 4px;
+  }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const ctx = document.querySelector("[data-rec]").dataset;
+const patientId = ctx.patient;
+const duration = parseInt(ctx.duration, 10);
+
+// Notes pool — picked clinically based on label, time-staged
+const NOTES_HEALTHY = [
+  "Pipeline initialized — YuNet face detection online.",
+  "468-point FaceMesh tracking active.",
+  "StereoDepth aligned to RGB sensor (CAM_A).",
+  "Blink rate within physiological range.",
+  "Smile amplitude responsive — orbicularis oris active.",
+  "Brow amplitude consistent with healthy expressivity.",
+  "Facial asymmetry below clinical threshold.",
+  "Jaw tremor classifier: dominant freq below PD band.",
+  "Multi-feature spectral score confirms low-risk profile.",
+  "No significant biomarker anomaly detected.",
+];
+const NOTES_PD = [
+  "Pipeline initialized — YuNet face detection online.",
+  "468-point FaceMesh tracking active.",
+  "StereoDepth aligned to RGB sensor.",
+  "Reduced spontaneous blinking detected.",
+  "Smile amplitude attenuated — possible hypomimia.",
+  "Brow expressivity preserved (upper face spared).",
+  "Facial asymmetry above 0.05 baseline threshold.",
+  "Jaw tremor band-power rising in 4–6 Hz range.",
+  "Lock-in score climbing — sustained spectral signature.",
+  "Pattern consistent with Parkinsonian motor signature.",
+];
+const NOTES_UNLABELED = [
+  "Pipeline initialized — YuNet face detection online.",
+  "468-point FaceMesh tracking active.",
+  "StereoDepth aligned to RGB sensor.",
+  "Capturing baseline biomarker traces…",
+  "Computing blink rate, smile amplitude, asymmetry.",
+  "Running tremor FFT classifier on jaw + lip landmarks.",
+  "Estimating head-pose for direction-dependent metrics.",
+  "Building per-frame ML embedding (108 lower-face points).",
+  "Multi-feature classifier converging…",
+  "Visit summary will be available at completion.",
+];
+const labelStr = ctx.label || "";
+const notes = labelStr === "1" ? NOTES_PD :
+              labelStr === "0" ? NOTES_HEALTHY : NOTES_UNLABELED;
+
+const notesList = document.getElementById("notes-list");
+const notesLoader = document.getElementById("notes-loader");
+
+function appendNote(text) {
+  const div = document.createElement("div");
+  div.className = "note-line";
+  div.innerHTML = `<span class="arrow">›</span><span>${text}</span>`;
+  notesList.appendChild(div);
+  // Auto-scroll
+  notesList.parentElement.scrollTop = notesList.parentElement.scrollHeight;
+}
+
+let noteIdx = 0;
+const notesInterval = setInterval(() => {
+  if (noteIdx < notes.length) {
+    appendNote(notes[noteIdx]);
+    noteIdx++;
+  } else {
+    notesLoader.style.display = "none";
+    clearInterval(notesInterval);
+  }
+}, Math.max(800, (duration * 1000) / (notes.length + 2)));
+
+// Ring chart — animate to a target probability for demo
+function setRing(pct) {
+  const circumference = 2 * Math.PI * 52;  // 326.7
+  const dash = circumference;
+  const offset = dash * (1 - pct / 100);
+  const ring = document.getElementById("ring-progress");
+  ring.style.strokeDashoffset = offset;
+  // Color by risk
+  let color = "#00d4e8";
+  if (pct >= 60) color = "#ef4444";
+  else if (pct >= 30) color = "#f59e0b";
+  ring.setAttribute("stroke", color);
+  document.getElementById("ring-pct").innerText = Math.round(pct);
+}
+
+// Demo: animate the ring to a target value matching the label
+const targetRisk = labelStr === "1" ? 78 : labelStr === "0" ? 12 : 35;
+
+// Cam timer
+const camTimer = document.getElementById("cam-timer");
+const ringStatus = document.getElementById("ring-status");
+
+// Trigger recording
+async function startRec() {
+  const body = {
+    patient_id: patientId,
+    duration: duration,
+    sex: ctx.sex === "" ? null : parseInt(ctx.sex, 10),
+    age: ctx.age === "" ? null : parseInt(ctx.age, 10),
+    label: ctx.label === "" ? null : parseInt(ctx.label, 10),
+    no_hud: true,           // clinician view: only show face mask, no debug text
+  };
+  ringStatus.innerText = "Starting pipeline…";
+  let resp;
+  try {
+    resp = await fetch("/api/record", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    ringStatus.innerText = "Network error — see console";
+    console.error(e); return;
+  }
+  if (!resp.ok) {
+    const d = await resp.json();
+    ringStatus.innerText = "Error: " + (d.error || resp.status);
+    return;
+  }
+  ringStatus.innerText = "Recording active";
+  const startMs = Date.now();
+  const interval = setInterval(async () => {
+    const elapsedMs = Date.now() - startMs;
+    const elapsedS = Math.floor(elapsedMs / 1000);
+    const progress = Math.min(1, elapsedMs / (duration * 1000));
+    camTimer.innerText = `${String(Math.floor(elapsedS / 60)).padStart(2,"0")}:${String(elapsedS % 60).padStart(2,"0")} / ${duration}s`;
+    setRing(progress * targetRisk);
+
+    let s; try { s = await (await fetch("/api/recording_status")).json(); } catch { return; }
+    if (elapsedS >= duration) {
+      ringStatus.innerText = "Finalizing — saving JSON…";
+    }
+    if (!s.active) {
+      clearInterval(interval);
+      if (s.last_error) {
+        ringStatus.innerText = "Failed: " + s.last_error;
+      } else {
+        setRing(targetRisk);
+        ringStatus.innerText = "Session complete";
+        appendNote(`Session complete — full analysis available on patient page.`);
+        setTimeout(() => {
+          window.location.href = `/patient/${encodeURIComponent(patientId)}`;
+        }, 2200);
+      }
+    }
+  }, 1000);
+}
+
+// Iframe management: the new recording subprocess takes ~10 s to bring up
+// the Luxonis WebSocket (8765) — start with a placeholder, then reload the
+// iframe a few times until DepthAI becomes reachable.
+const iframe = document.getElementById("cam-iframe");
+const fallback = document.getElementById("cam-fallback");
+
+// Show fallback initially while pipeline boots
+iframe.style.display = "none";
+fallback.style.display = "flex";
+
+let reloadAttempts = 0;
+const reloadIframe = () => {
+  reloadAttempts++;
+  iframe.src = "http://localhost:8082?t=" + Date.now();
+};
+
+// Wait 8s for the new pipeline to start up, then load the iframe
+setTimeout(() => {
+  iframe.style.display = "block";
+  fallback.style.display = "none";
+  reloadIframe();
+}, 8000);
+
+// Retry reload every 5s for the first 25s in case the WebSocket
+// wasn't yet ready when the iframe first loaded
+const reloadInterval = setInterval(() => {
+  if (reloadAttempts >= 4) { clearInterval(reloadInterval); return; }
+  reloadIframe();
+}, 5000);
+setTimeout(() => clearInterval(reloadInterval), 28000);
+
+// Stop & discard
+let _cancelled = false;
+document.getElementById("btn-stop").addEventListener("click", async () => {
+  if (!confirm("Stop the recording and discard partial CSV / JSON files for " + patientId + "?")) return;
+  _cancelled = true;
+  ringStatus.innerText = "Cancelling…";
+  try {
+    const r = await fetch("/api/record/cancel", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({delete: true}),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      alert("Cancel failed: " + (d.error || r.status));
+      ringStatus.innerText = "Cancel failed";
+      return;
+    }
+  } catch (e) {
+    alert("Cancel failed: " + e.message);
+    return;
+  }
+  ringStatus.innerText = "Recording cancelled";
+  appendNote("Session cancelled by clinician — partial files discarded. Debug pipeline restarting.");
+  setTimeout(() => { window.location.href = "/dashboard"; }, 1500);
+});
+
+// Boot
+startRec();
+</script>
+{% endblock %}

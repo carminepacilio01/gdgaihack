@@ -1,0 +1,14 @@
+identifier = "com.neurosight.parkinson-screening"
+app_version = "0.1.0"
+assign_frontend_port = true
+
+prepare_container = [
+    { type = "RUN", command = "apt-get update" },
+    { type = "RUN", command = "apt-get install -y python3-pip" },
+    { type = "COPY", source = "requirements.txt", target = "requirements.txt" },
+    { type = "RUN", command = "pip3 install -r /app/requirements.txt --break-system-packages" },
+]
+
+depthai_models = { yaml_path = "./depthai_models" }
+
+entrypoint = ["bash", "-c", "python3 -u /app/main.py"]

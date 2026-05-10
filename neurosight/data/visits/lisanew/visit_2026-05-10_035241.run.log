@@ -1,0 +1,15 @@
+To connect to the OAK visualizer use the following:
+If you are opening the visualizer locally, open http://localhost:8082 in your browser
+If you are using peripheral mode and viewing from another machine, open http://192.168.2.1:8082 in your browser
+If you are using oakapp base image, open https://192.168.2.1:9000 in your browser
+[2026-05-10 03:52:49] [depthai-nodes] [WARNING] [depthai-nodes] You are using ImgDetectionsBridge to transform from ImgDetectionsExtended to ImgDetections. This results in lose of keypoint, segmentation and bbox rotation information if present in the original message.
+[neurovista] Platform: RVC4
+[neurovista] Pipeline ready, starting…
+[visit_writer] live CSV log    → data/visits/lisanew/visit_2026-05-10_035241.csv
+[visit_writer] embed CSV       → data/visits/lisanew/embed_2026-05-10_035241.csv
+[visit_writer] master append → data/master_dataset.csv (patient_num=19)
+[visit_writer] wrote data/visits/lisanew/visit_2026-05-10_035241.json  (1046 frames)
+[visit_writer] sealed CSV log data/visits/lisanew/visit_2026-05-10_035241.csv
+[visit_writer] sealed embed CSV data/visits/lisanew/embed_2026-05-10_035241.csv
+[visit_writer] flushed master append → data/master_dataset.csv
+[neurovista] visit completed — wrapping up.

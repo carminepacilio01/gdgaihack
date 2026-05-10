@@ -1,0 +1,333 @@
+{% extends "base.html" %}
+{% block title %}Patients — {ParC}{% endblock %}
+
+{% block body %}
+<div class="page">
+  <h1 class="page-title">Patients</h1>
+  <p class="page-subtitle">Select the patient to start a diagnostic session. The system will run live facial-biomarker analysis on the OAK 4 D.</p>
+
+  <div id="rec-banner" class="rec-banner" style="display:none;"></div>
+
+  <!-- Stat strip -->
+  <section class="stat-strip">
+    <div class="stat">
+      <div class="stat-label">Patients</div>
+      <div class="stat-value">{{ n_patients }}</div>
+      <div class="stat-sub">{{ total_visits }} visits recorded</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">PD-labeled</div>
+      <div class="stat-value">{{ n_pd }}</div>
+      <div class="stat-sub">{% if n_patients %}{{ (n_pd / n_patients * 100)|round(0)|int }}%{% else %}—{% endif %} of cohort</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Healthy</div>
+      <div class="stat-value">{{ n_no_pd }}</div>
+      <div class="stat-sub">{% if n_patients %}{{ (n_no_pd / n_patients * 100)|round(0)|int }}%{% else %}—{% endif %} controls</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">With baseline</div>
+      <div class="stat-value">{{ n_baseline }}</div>
+      <div class="stat-sub">rest + talk + smile</div>
+    </div>
+  </section>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <input type="search" id="search" placeholder="Search patient by name…" autocomplete="off">
+    <button class="btn btn-primary" id="btn-new-visit">＋ New visit</button>
+    <button class="btn btn-ghost" id="btn-baseline">⚙ Run baseline</button>
+    <button class="btn btn-ghost" id="btn-reboot" title="Soft-reboot OAK device when X_LINK_DEVICE_NOT_FOUND errors appear">↻ Reboot OAK</button>
+  </div>
+
+  <!-- Patient card grid -->
+  <div class="card-grid">
+    {% if cards %}
+    <div class="card" style="grid-column: 1 / -1;">
+      <h2><span style="color:var(--parc-cyan);">●</span> Patient list</h2>
+      <p class="card-sub">{{ n_patients }} patient{% if n_patients != 1 %}s{% endif %} on file. Click to open the patient record.</p>
+      <div style="display:flex;flex-direction:column;gap:12px;" id="patients-grid">
+        {% for c in cards %}
+          <a href="{{ url_for('patient_view', patient_id=c.patient_id) }}" class="patient-row" data-name="{{ c.patient_id|lower }}">
+            <div class="left">
+              <div class="avatar">{{ c.patient_id[0]|upper }}</div>
+              <div>
+                <div class="name">
+                  {{ c.patient_id }}
+                  {% if c.patient_num %}<span style="font-family:Menlo,monospace;font-size:0.72rem;color:var(--parc-card-fg-soft);font-weight:400;">#{{ c.patient_num }}</span>{% endif %}
+                </div>
+                <div class="meta">
+                  {% if c.age %}{{ c.age }} y{% else %}— y{% endif %} ·
+                  {% if c.sex == 0 %}♂ M{% elif c.sex == 1 %}♀ F{% else %}— sex{% endif %} ·
+                  {% if c.label == 1 %}Parkinson{% elif c.label == 0 %}no PD{% else %}unlabeled{% endif %} ·
+                  {{ c.n_visits }} visit{% if c.n_visits != 1 %}s{% endif %}
+                </div>
+              </div>
+            </div>
+            <div class="right">
+              <div class="risk">
+                {% if c.last_pd is not none %}
+                  {% if c.last_pd < 30 %}
+                    <span class="label risk-low">Low risk</span>
+                  {% elif c.last_pd < 60 %}
+                    <span class="label risk-moderate">Moderate</span>
+                  {% else %}
+                    <span class="label risk-high">High</span>
+                  {% endif %}
+                  <span class="pct">PD {{ "%.1f"|format(c.last_pd) }}%</span>
+                {% else %}
+                  <span class="label" style="color:var(--parc-card-fg-soft);">No data</span>
+                  <span class="pct">{% if c.has_baseline %}baseline OK{% else %}no baseline{% endif %}</span>
+                {% endif %}
+              </div>
+              <span class="chevron">›</span>
+            </div>
+          </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% else %}
+    <div class="card" style="grid-column: 1 / -1; text-align:center; padding:48px;">
+      <h2 style="justify-content:center;">No patients yet</h2>
+      <p class="card-sub">Click <strong>＋ New visit</strong> above to register the first one.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- New visit modal -->
+<div id="visit-modal" class="modal-mask">
+  <div class="modal">
+    <h2>Start new visit</h2>
+    <p class="subtitle">60 s on the OAK 4 D. Records biomarker CSV/JSON, ML embedding, and the per-visit summary.</p>
+    <label>Patient name</label>
+    <input id="vm-patient" type="text" autocomplete="off" placeholder="e.g. mario / p_001">
+    <div class="hint" id="vm-hint"></div>
+    <div class="row2">
+      <div><label>Sex</label>
+        <select id="vm-sex"><option value="">—</option><option value="0">M</option><option value="1">F</option></select>
+      </div>
+      <div><label>Age</label>
+        <input id="vm-age" type="number" min="1" max="120" placeholder="years">
+      </div>
+    </div>
+    <div class="row2">
+      <div><label>Reference label</label>
+        <select id="vm-label"><option value="">— unknown</option><option value="0">No Parkinson</option><option value="1">Parkinson</option></select>
+      </div>
+      <div><label>Duration (s)</label>
+        <input id="vm-duration" type="number" min="10" max="600" value="60">
+      </div>
+    </div>
+    <div class="actions">
+      <button id="vm-cancel" class="btn">Cancel</button>
+      <button id="vm-start" class="btn btn-primary">● Start recording</button>
+    </div>
+  </div>
+</div>
+
+<!-- Baseline modal -->
+<div id="bl-modal" class="modal-mask">
+  <div class="modal">
+    <h2>Run baseline calibration</h2>
+    <p class="subtitle">3 short states (rest, talk, smile) — about 30 s total. Builds the patient's personal noise floor.</p>
+    <label>Patient name</label>
+    <input id="bm-patient" type="text" autocomplete="off">
+    <div class="row2">
+      <div><label>Sex</label>
+        <select id="bm-sex"><option value="">—</option><option value="0">M</option><option value="1">F</option></select>
+      </div>
+      <div><label>Age</label>
+        <input id="bm-age" type="number" min="1" max="120">
+      </div>
+    </div>
+    <div class="row2">
+      <div><label>Reference label</label>
+        <select id="bm-label"><option value="">— unknown</option><option value="0">No Parkinson</option><option value="1">Parkinson</option></select>
+      </div>
+      <div><label>Stage duration (s)</label>
+        <input id="bm-duration" type="number" min="5" max="60" value="10">
+      </div>
+    </div>
+    <div class="actions">
+      <button id="bm-cancel" class="btn">Cancel</button>
+      <button id="bm-start" class="btn btn-primary">⚙ Start baseline</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById("search").addEventListener("input", e => {
+  const q = e.target.value.toLowerCase();
+  document.querySelectorAll(".patient-row").forEach(c => {
+    c.style.display = (c.dataset.name || "").includes(q) ? "" : "none";
+  });
+});
+
+let _patientIndex = null;
+async function loadIndex() {
+  try { _patientIndex = await (await fetch("/api/patient_index")).json(); }
+  catch { _patientIndex = {next_id: 1, by_name: {}, labels: {}}; }
+}
+function hintForName(input, hintEl, labelSel) {
+  const name = input.value.trim();
+  if (!name || !_patientIndex) { hintEl.innerText = ""; return; }
+  const num = _patientIndex.by_name[name];
+  if (num != null) {
+    const presetLabel = _patientIndex.labels[String(num)];
+    let txt = `Existing patient · #${num}`;
+    if (presetLabel != null) {
+      txt += ` · preset: ${presetLabel === 1 ? "Parkinson" : "no Parkinson"}`;
+      labelSel.value = String(presetLabel);
+    }
+    hintEl.innerText = txt;
+  } else {
+    const nextNum = _patientIndex.next_id;
+    const presetLabel = _patientIndex.labels[String(nextNum)];
+    let txt = `New patient · will be assigned #${nextNum}`;
+    if (presetLabel != null) {
+      txt += ` · preset: ${presetLabel === 1 ? "Parkinson" : "no Parkinson"}`;
+      labelSel.value = String(presetLabel);
+    }
+    hintEl.innerText = txt;
+  }
+}
+
+const visitModal = document.getElementById("visit-modal");
+const blModal = document.getElementById("bl-modal");
+
+document.getElementById("btn-new-visit").addEventListener("click", () => {
+  loadIndex().then(() => {
+    ["vm-patient","vm-sex","vm-age","vm-label"].forEach(id => document.getElementById(id).value = "");
+    document.getElementById("vm-duration").value = "60";
+    document.getElementById("vm-hint").innerText = "";
+    visitModal.classList.add("show");
+    document.getElementById("vm-patient").focus();
+  });
+});
+document.getElementById("btn-baseline").addEventListener("click", () => {
+  loadIndex().then(() => {
+    ["bm-patient","bm-sex","bm-age","bm-label"].forEach(id => document.getElementById(id).value = "");
+    document.getElementById("bm-duration").value = "10";
+    blModal.classList.add("show");
+    document.getElementById("bm-patient").focus();
+  });
+});
+document.getElementById("vm-cancel").addEventListener("click", () => visitModal.classList.remove("show"));
+document.getElementById("bm-cancel").addEventListener("click", () => blModal.classList.remove("show"));
+document.getElementById("vm-patient").addEventListener("input", () =>
+  hintForName(document.getElementById("vm-patient"),
+              document.getElementById("vm-hint"),
+              document.getElementById("vm-label")));
+
+document.getElementById("btn-reboot").addEventListener("click", async () => {
+  if (!confirm("Soft-reboot the OAK device? Camera will be unavailable for ~30 s.")) return;
+  const banner = document.getElementById("rec-banner");
+  banner.style.display = "block"; banner.className = "rec-banner";
+  banner.innerText = "Rebooting OAK device…";
+  try {
+    const r = await fetch("/api/device/reboot", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+    if (!r.ok) throw new Error((await r.json()).error || r.status);
+    banner.className = "rec-banner success";
+    banner.innerText = "Reboot initiated — wait ~30 s.";
+  } catch (e) {
+    banner.className = "rec-banner error";
+    banner.innerText = "Reboot failed: " + e.message;
+  }
+});
+
+document.getElementById("vm-start").addEventListener("click", () => {
+  const patient = document.getElementById("vm-patient").value.trim();
+  if (!patient) { alert("Patient name required"); return; }
+  const params = new URLSearchParams({
+    duration: document.getElementById("vm-duration").value || "60",
+    sex: document.getElementById("vm-sex").value,
+    age: document.getElementById("vm-age").value,
+    label: document.getElementById("vm-label").value,
+  });
+  // Navigate to the session page — it will start the recording on load
+  window.location.href = `/session/${encodeURIComponent(patient)}?${params}`;
+});
+
+document.getElementById("bm-start").addEventListener("click", async () => {
+  const patient = document.getElementById("bm-patient").value.trim();
+  if (!patient) { alert("Patient name required"); return; }
+  const body = {
+    patient_id: patient,
+    duration: parseInt(document.getElementById("bm-duration").value || "10", 10),
+    sex: document.getElementById("bm-sex").value === "" ? null : parseInt(document.getElementById("bm-sex").value, 10),
+    age: document.getElementById("bm-age").value === "" ? null : parseInt(document.getElementById("bm-age").value, 10),
+    label: document.getElementById("bm-label").value === "" ? null : parseInt(document.getElementById("bm-label").value, 10),
+  };
+  blModal.classList.remove("show");
+  await runBaseline(body);
+});
+
+async function runRecord(body) {
+  const banner = document.getElementById("rec-banner");
+  banner.style.display = "block"; banner.className = "rec-banner";
+  banner.innerHTML = `Starting recording for <strong>${body.patient_id}</strong>… <div class="rec-progress"><div></div></div>`;
+  let resp;
+  try { resp = await fetch("/api/record", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)}); }
+  catch (e) { banner.className = "rec-banner error"; banner.innerText = "Network error: " + e.message; return; }
+  const data = await resp.json();
+  if (!resp.ok) { banner.className = "rec-banner error"; banner.innerText = "Error: " + (data.error || resp.status); return; }
+  const totalMs = body.duration * 1000;
+  const startMs = Date.now();
+  const interval = setInterval(async () => {
+    const elapsedMs = Date.now() - startMs;
+    let s; try { s = await (await fetch("/api/recording_status")).json(); } catch { return; }
+    const pct = Math.min(100, (elapsedMs / totalMs) * 100);
+    const elapsedS = Math.floor(elapsedMs / 1000);
+    const txt = (elapsedS >= body.duration)
+      ? `Finalizing recording for <strong>${body.patient_id}</strong> — saving JSON & restarting pipeline…`
+      : `Recording <strong>${body.patient_id}</strong> · ${elapsedS}/${body.duration}s`;
+    banner.innerHTML = txt + ` <div class="rec-progress"><div style="width:${pct}%"></div></div>`;
+    if (!s.active) {
+      clearInterval(interval);
+      if (s.last_error) {
+        banner.className = "rec-banner error";
+        banner.innerText = "Recording failed: " + s.last_error;
+      } else {
+        banner.className = "rec-banner success";
+        banner.innerHTML = `Recording complete · <a href="/patient/${body.patient_id}" style="color:white;text-decoration:underline;">open patient →</a>`;
+        setTimeout(() => location.reload(), 1800);
+      }
+    }
+  }, 1000);
+}
+
+async function runBaseline(body) {
+  const banner = document.getElementById("rec-banner");
+  banner.style.display = "block"; banner.className = "rec-banner";
+  banner.innerHTML = `Starting baseline for <strong>${body.patient_id}</strong>… <div class="rec-progress"><div></div></div>`;
+  let resp;
+  try { resp = await fetch("/api/baseline", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)}); }
+  catch (e) { banner.className = "rec-banner error"; banner.innerText = "Network error: " + e.message; return; }
+  const data = await resp.json();
+  if (!resp.ok) { banner.className = "rec-banner error"; banner.innerText = "Error: " + (data.error || resp.status); return; }
+  const totalMs = body.duration * 3 * 1000;
+  const startMs = Date.now();
+  const interval = setInterval(async () => {
+    const elapsedMs = Date.now() - startMs;
+    let s; try { s = await (await fetch("/api/baseline_status")).json(); } catch { return; }
+    const pct = Math.min(100, (elapsedMs / totalMs) * 100);
+    banner.innerHTML = `Baseline · stage <strong>${(s.current_step||"—").toUpperCase()}</strong> · ${s.completed.length}/3 stages done` +
+      ` <div class="rec-progress"><div style="width:${pct}%"></div></div>`;
+    if (!s.active) {
+      clearInterval(interval);
+      if (s.last_error) {
+        banner.className = "rec-banner error";
+        banner.innerText = "Baseline failed: " + s.last_error;
+      } else {
+        banner.className = "rec-banner success";
+        banner.innerHTML = `Baseline complete for <strong>${body.patient_id}</strong>.`;
+        setTimeout(() => location.reload(), 1800);
+      }
+    }
+  }, 1500);
+}
+</script>
+{% endblock %}

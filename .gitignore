@@ -27,3 +27,31 @@ master_dataset.csv
 
 # Original placeholder
 gdg
+
+# Patient data — keep only demo_patient + lisanew for the demo,
+# exclude all other recorded sessions (PII, large files).
+neurosight/data/visits/*
+!neurosight/data/visits/demo_patient/
+!neurosight/data/visits/lisanew/
+
+# Per-patient registry, master CSV and pipeline log reference all
+# sessions — regenerated at runtime.
+neurosight/data/patient_index.json
+neurosight/data/master_dataset.csv
+neurosight/data/debug_pipeline.log
+neurosight/data/reports/
+
+# Tech-dashboard runtime state
+neurosight/data/_session_state.json
+neurosight/__pycache__/
+neurosight/**/__pycache__/
+
+# Background portal logs
+/tmp/portal_*.log
+
+# DepthAI runtime caches — re-downloaded on first run
+neurosight/.cache/
+neurosight/.depthai_cached_models/
+
+# Editor / platform artifacts
+**/.replit-artifact/
