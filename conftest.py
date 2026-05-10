@@ -5,19 +5,19 @@ from pathlib import Path
 
 import pytest
 
-from parkinson_agent.input_schema import PatientMetricsPayload
+from parkinson_agent.input_schema import KnowledgePayload
 
 
-SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
-
-
-@pytest.fixture
-def payload() -> PatientMetricsPayload:
-    """Demo payload with hypomimia + jaw tremor + L-side mouth asymmetry."""
-    return PatientMetricsPayload.from_json_file(SAMPLES_DIR / "demo_session.json")
+REPO_ROOT = Path(__file__).resolve().parent
+DEFAULT_DATA = REPO_ROOT / "data" / "data.json"
 
 
 @pytest.fixture
-def healthy_payload() -> PatientMetricsPayload:
-    """Demo payload with normal expressivity, no tremor, symmetric mouth."""
-    return PatientMetricsPayload.from_json_file(SAMPLES_DIR / "healthy_session.json")
+def payload() -> KnowledgePayload:
+    """The agent's input — `data.json` produced by the upstream pipeline."""
+    if not DEFAULT_DATA.exists():
+        pytest.skip(
+            f"{DEFAULT_DATA.relative_to(REPO_ROOT)} missing — "
+            f"run `python -m models.generate_knowledge` first."
+        )
+    return KnowledgePayload.from_json_file(DEFAULT_DATA)

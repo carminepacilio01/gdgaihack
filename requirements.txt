@@ -1,5 +1,11 @@
+# Agent runtime — what `parkinson_agent/` actually needs.
 ollama>=0.4.0
 pydantic>=2.7
+
+# Upstream pipeline (`models/generate_knowledge.py`) — CSV → data.json.
+numpy>=1.26
+scipy>=1.11
+pandas>=2.0
 
 # Testing
 pytest>=8.0

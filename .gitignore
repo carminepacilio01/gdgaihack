@@ -1,1 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+
+# Large data — small CSV (dataset/embed_*.csv) stays tracked, big ones don't.
+master_dataset.csv
+*.npy
+*.pkl
+*.pth
+*.onnx
+
+# Original placeholder
 gdg

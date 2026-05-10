@@ -1,15 +1,11 @@
 """Streamlit UI for the clinician demo.
 
-Two modes:
-- "Sample payload" — pick one of the JSON files under `samples/`.
-- "Upload JSON" — load an OAK-emitted payload from disk.
+Loads `data.json` (produced by the upstream model under `models/`),
+runs the screening agent, and renders the structured report with the
+audit trail of every tool call.
 
-Once a payload is loaded, click "Run screening" and we display:
-- The structured ScreeningReport, rendered as the clinician would see it.
-- The full audit trail of tool calls.
-
-Runtime: a local Ollama server. Make sure `ollama serve` is running and the
-chosen model is pulled (e.g. `ollama pull llama3.1`).
+Runtime: a local Ollama server. Make sure `ollama serve` is running
+and the chosen model is pulled (e.g. `ollama pull llama3.2:3b`).
 
 Run with:
     streamlit run clinician_ui.py
@@ -23,11 +19,11 @@ from pathlib import Path
 import streamlit as st
 
 from parkinson_agent.agent import run_screening_agent
-from parkinson_agent.input_schema import PatientMetricsPayload
+from parkinson_agent.input_schema import KnowledgePayload
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-SAMPLES_DIR = REPO_ROOT / "samples"
+DEFAULT_DATA = REPO_ROOT / "data" / "data.json"
 
 
 st.set_page_config(page_title="PD Face Screening", layout="wide")
@@ -39,40 +35,37 @@ with st.sidebar:
     st.header("Runtime")
     model = st.selectbox(
         "Ollama model",
-        ["llama3.1", "qwen2.5", "llama3.1:70b", "qwen2.5:14b"],
+        ["llama3.2:3b", "qwen2.5:3b", "llama3.1", "qwen2.5", "mistral"],
         index=0,
-        help="Must be pulled locally (`ollama pull <name>`) and support function-calling.",
+        help="Must be pulled locally (`ollama pull <name>`) and support function-calling. "
+             "`llama3.2:3b` is the recommended default for CPU-only laptops.",
     )
     ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
     st.caption(f"Ollama host: `{ollama_host}`")
 
-    st.header("Source")
-    samples = sorted(SAMPLES_DIR.glob("*.json")) if SAMPLES_DIR.exists() else []
-    sample_names = [p.name for p in samples]
-    source = st.radio("Payload source", ["Sample", "Upload JSON"])
+    st.header("Input (data.json)")
+    path_str = st.text_input("Payload path", value=str(DEFAULT_DATA))
+    uploaded = st.file_uploader("…or upload a JSON", type=["json"])
 
-    payload: PatientMetricsPayload | None = None
     raw_dict: dict | None = None
-
-    if source == "Sample":
-        if not sample_names:
-            st.warning("No sample JSON files found under `samples/`.")
-        else:
-            chosen = st.selectbox("Sample payload", sample_names)
-            with open(SAMPLES_DIR / chosen, "r", encoding="utf-8") as f:
-                raw_dict = json.load(f)
+    if uploaded is not None:
+        raw_dict = json.loads(uploaded.read().decode("utf-8"))
     else:
-        uploaded = st.file_uploader("OAK payload", type=["json"])
-        if uploaded is not None:
-            raw_dict = json.loads(uploaded.read().decode("utf-8"))
+        path = Path(path_str)
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                raw_dict = json.load(f)
+        else:
+            st.warning(f"Payload not found: `{path}`. "
+                       f"Run `python -m models.generate_knowledge` to create it.")
 
 
 if raw_dict is None:
-    st.info("Pick a sample payload or upload an OAK JSON file from the sidebar.")
+    st.info("Provide a `data.json` payload via path or upload.")
     st.stop()
 
 try:
-    payload = PatientMetricsPayload.model_validate(raw_dict)
+    payload = KnowledgePayload.model_validate(raw_dict)
 except Exception as exc:
     st.error(f"Payload does not match the expected schema:\n\n```\n{exc}\n```")
     st.stop()
@@ -80,22 +73,25 @@ except Exception as exc:
 
 # Session summary panel
 st.subheader("Session")
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 col1.metric("Patient", payload.patient_id)
-col2.metric("Duration", f"{payload.duration_s:.1f}s")
-col3.metric(
-    "Face coverage",
-    f"{payload.face_coverage*100:.0f}%" if payload.face_coverage is not None else "N/A",
-)
+col2.metric("Frames", payload.n_frames or "?")
+col3.metric("Duration", f"{payload.duration_s:.1f}s")
+col4.metric("FPS", f"{payload.fps:.1f}" if payload.fps else "?")
 
-with st.expander("Tasks"):
-    st.write([t.model_dump() for t in payload.tasks])
+bits = []
+if payload.metadata.age is not None: bits.append(f"age={payload.metadata.age:g}")
+if payload.metadata.sex is not None: bits.append(f"sex={payload.metadata.sex}")
+if payload.metadata.ground_truth_label is not None:
+    bits.append(f"ground-truth label={payload.metadata.ground_truth_label}")
+if bits:
+    st.caption("  ·  ".join(bits))
 
 with st.expander("Regional weights (clinical priors)"):
     st.json(payload.regional_weights)
 
-with st.expander("Raw OAK metrics"):
-    st.json(payload.metrics.model_dump(exclude_none=True))
+with st.expander("Upstream knowledge (data.json sections)"):
+    st.json(payload.model_dump(exclude_none=True))
 
 
 # Run agent

@@ -1,70 +1,73 @@
-"""Validate that the OAK JSON payload schema parses correctly."""
+"""Validate the data.json schema and the sample payload."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from parkinson_agent.input_schema import PatientMetricsPayload
+from parkinson_agent.input_schema import KnowledgePayload
 
 
-SAMPLES_DIR = Path(__file__).resolve().parent.parent / "samples"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SAMPLE = REPO_ROOT / "data" / "data.json"
 
 
-class TestSamplePayloads:
-    def test_demo_session_loads(self):
-        payload = PatientMetricsPayload.from_json_file(SAMPLES_DIR / "demo_session.json")
-        assert payload.patient_id == "DEMO-P-0001"
-        assert payload.metrics.regional_motion is not None
-        assert payload.metrics.jaw_tremor is not None
-        assert payload.metrics.regional_motion.composite_expressivity_score is not None
+@pytest.mark.skipif(not SAMPLE.exists(), reason="data/data.json missing")
+class TestSamplePayload:
+    def test_loads(self):
+        p = KnowledgePayload.from_json_file(SAMPLE)
+        assert p.patient_id
+        assert p.session_id
+        assert p.duration_s > 0
 
-    def test_healthy_session_loads(self):
-        payload = PatientMetricsPayload.from_json_file(SAMPLES_DIR / "healthy_session.json")
-        assert payload.patient_id == "DEMO-P-0002"
-        assert payload.metrics.jaw_tremor.in_parkinsonian_range_4_6hz is False
+    def test_clinical_features_present(self):
+        p = KnowledgePayload.from_json_file(SAMPLE)
+        cf = p.clinical_features
+        assert cf.regional_motion is not None
+        assert cf.jaw_tremor is not None
+        assert cf.mouth_asymmetry is not None
 
-    def test_weights_match_user_priors(self):
-        payload = PatientMetricsPayload.from_json_file(SAMPLES_DIR / "demo_session.json")
-        # The weights the project owner specified.
-        assert payload.regional_weights["chin_jaw"] == 1.0
-        assert payload.regional_weights["lower_lip"] == 1.0
-        assert payload.regional_weights["upper_lip"] == 0.6
-        assert payload.regional_weights["mouth_corners"] == 0.6
-        assert payload.regional_weights["cheeks"] == 0.4
-        assert payload.regional_weights["eyelids"] == 0.2
-        assert payload.regional_weights["neck"] == 0.2
+    def test_user_weights_round_trip(self):
+        p = KnowledgePayload.from_json_file(SAMPLE)
+        assert p.regional_weights["chin_jaw"] == 1.0
+        assert p.regional_weights["lower_lip"] == 1.0
+        assert p.regional_weights["mouth_corners"] == 0.6
 
 
 class TestSchemaValidation:
-    def test_missing_required_field_raises(self):
-        bad = {
-            # patient_id missing
-            "session_id": "x",
-            "duration_s": 10.0,
+    def test_minimum_required_fields(self):
+        minimal = {
+            "patient_id": "p", "session_id": "s",
+            "duration_s": 1.0,
             "regional_weights": {"chin_jaw": 1.0},
-            "metrics": {},
         }
-        with pytest.raises(ValidationError):
-            PatientMetricsPayload.model_validate(bad)
+        p = KnowledgePayload.model_validate(minimal)
+        assert p.clinical_features.regional_motion is None
+        assert p.model_inference is None
 
-    def test_partial_metrics_section_is_ok(self):
-        # OAK can omit individual metric sections (e.g. jaw_tremor unavailable).
+    def test_missing_required_field_raises(self):
+        bad = {"session_id": "s", "duration_s": 1.0, "regional_weights": {}}
+        with pytest.raises(ValidationError):
+            KnowledgePayload.model_validate(bad)
+
+    def test_pd_probability_bounds(self):
+        with pytest.raises(ValidationError):
+            KnowledgePayload.model_validate({
+                "patient_id": "p", "session_id": "s", "duration_s": 1.0,
+                "regional_weights": {"chin_jaw": 1.0},
+                "model_inference": {"model_name": "x", "pd_probability": 1.5},
+            })
+
+    def test_partial_clinical_features(self):
+        # Upstream model may compute only some features.
         partial = {
-            "patient_id": "P",
-            "session_id": "S",
-            "duration_s": 10.0,
+            "patient_id": "p", "session_id": "s", "duration_s": 1.0,
             "regional_weights": {"chin_jaw": 1.0},
-            "metrics": {
-                "blink_rate": {
-                    "valid": False,
-                    "reason": "insufficient_data",
-                },
+            "clinical_features": {
+                "jaw_tremor": {"valid": False, "reason": "no_data"},
             },
         }
-        payload = PatientMetricsPayload.model_validate(partial)
-        assert payload.metrics.blink_rate is not None
-        assert payload.metrics.blink_rate.valid is False
-        assert payload.metrics.regional_motion is None
+        p = KnowledgePayload.model_validate(partial)
+        assert p.clinical_features.jaw_tremor is not None
+        assert p.clinical_features.regional_motion is None

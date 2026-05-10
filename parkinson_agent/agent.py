@@ -6,8 +6,9 @@ Decoupled from the wire protocol where it matters:
   Pydantic schema, and retries on validation failure (bounded by max_iterations).
 
 Why Ollama: zero API cost for the hackathon, runs locally on the same laptop
-as the OAK device. Use `llama3.1` or `qwen2.5` — both support function
-calling. We pin temperature=0 by default for repeatability.
+as the OAK device. Default `llama3.2:3b` — small enough to be fast on CPU
+(Intel Macs) and supports function calling. We pin temperature=0 by default
+for repeatability.
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .input_schema import PatientMetricsPayload
+from .input_schema import KnowledgePayload
 from .schemas import ScreeningReport
 from .tools import all_tool_schemas, make_tools
 
@@ -26,30 +27,46 @@ from .tools import all_tool_schemas, make_tools
 SYSTEM_PROMPT = """\
 You are a clinical screening assistant for early Parkinson's disease.
 
-Your input is a structured JSON payload that a Luxonis OAK device produced
-from a face-only capture session. You do NOT see raw video or landmarks —
-only pre-computed numeric metrics. Your job is to inspect those numbers,
-explain what they mean in MDS-UPDRS terms, and produce a structured report
-that helps a clinician decide whether deeper assessment is warranted.
+Your only input is a `data.json` payload produced by an upstream model
+that already analyzed the patient's face capture. You do NOT see raw
+video, landmarks, or do any signal processing yourself. You call tools
+that read sections of that JSON and return numeric results. Your job is
+to interpret those numbers in MDS-UPDRS terms and produce a structured
+report that helps a clinician decide whether deeper assessment is warranted.
+
+WHAT THE UPSTREAM MODEL PROVIDES (each as a separate tool):
+- `get_regional_motion` — per-region range-of-motion + composite score.
+- `get_jaw_tremor` — 3–7 Hz spectral analysis of the chin.
+- `get_mouth_asymmetry` — left vs right mouth-corner mobility.
+- `get_model_inference` — output of a TCN classifier (PD probability),
+  if the upstream model ran it. May be missing.
 
 CLINICAL TARGETS (MDS-UPDRS Part III, face-only subset):
 - 3.2  Hypomimia (facial masking) — primary screening target.
-- 3.17 Rest tremor (jaw) — assess at rest.
-- Supportive: reduced blink rate, mouth-corner asymmetry, eyelid hypokinesia.
+- 3.17 Rest tremor (jaw) — assess from chin spectral analysis.
+- Supportive: mouth-corner asymmetry.
 
-REGIONAL WEIGHTS (clinical priors built into the metrics):
+REGIONAL WEIGHTS (clinical priors already applied in composite scores):
   HIGH:    chin/jaw, lower lip
   MID:     upper lip, mouth corners
   LOW-MID: cheeks
-  LOW:     eyelids, neck
-The composite expressivity score in `get_regional_motion` already applies
-these weights. Treat low-weight regions as supportive, not primary.
+Eyelids and neck are NOT measured (the upstream sparse landmark set
+lacks them) — do not assert eyelid hypokinesia or reduced blink rate.
+
+HOW TO COMBINE SIGNALS:
+- Clinical features are interpretable and primary.
+- The model probability (`get_model_inference`) is a strong but
+  black-box signal. Use it to corroborate or temper your conclusions —
+  not to override clinical reasoning.
+- Convergence between model probability and clinical features = high
+  confidence. Disagreement = lower confidence + flag in
+  `clinician_notes`.
 
 PROCEDURE:
-1. Call `get_session_info` first.
-2. Call `get_regional_motion`, `get_jaw_tremor`, `get_blink_rate`, and
-   `get_mouth_asymmetry` to build a complete picture.
-3. Reason about the numbers, then call `submit_report` exactly once.
+1. Call `get_session_info` first to see what's available.
+2. Call the relevant clinical-feature tools.
+3. Call `get_model_inference` if it's available.
+4. Reason about the numbers, then call `submit_report` exactly once.
 
 REPORT GUIDANCE:
 - `overall_risk_level`:
@@ -117,7 +134,7 @@ def _tool_call_args(tc: Any) -> tuple[str, dict]:
 
 
 def run_screening_agent(
-    payload: PatientMetricsPayload,
+    payload: KnowledgePayload,
     *,
     client: Any = None,
     model: str | None = None,
@@ -128,13 +145,13 @@ def run_screening_agent(
 
     Parameters
     ----------
-    payload : PatientMetricsPayload
-        The OAK-emitted JSON payload, already validated.
+    payload : KnowledgePayload
+        The `data.json` document from the upstream model, already validated.
     client : Any, optional
         Anything with `.chat(model=..., messages=..., tools=..., options=...)`
         returning an Ollama-shaped response. Defaults to a real Ollama client.
     model : str, optional
-        Ollama model tag. Defaults to env `OLLAMA_MODEL` or `llama3.1`.
+        Ollama model tag. Defaults to env `OLLAMA_MODEL` or `llama3.2:3b`.
     max_iterations : int
         Hard cap on round-trips with the LLM.
     temperature : float
@@ -143,7 +160,7 @@ def run_screening_agent(
     if client is None:
         client = _default_client()
     if model is None:
-        model = os.environ.get("OLLAMA_MODEL", "llama3.1")
+        model = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 
     tool_registry = make_tools(payload)
     tool_schemas = all_tool_schemas()
@@ -151,8 +168,10 @@ def run_screening_agent(
     user_prompt = (
         f"Screen patient {payload.patient_id} (session {payload.session_id}). "
         f"Capture duration: {payload.duration_s:.1f}s. "
-        f"Use the tools to inspect the metrics, then submit a structured report "
-        f"that the clinician will read."
+        f"Inspect the upstream model's knowledge with the tools, then submit "
+        f"a structured report. In the report set "
+        f"`patient_id={payload.patient_id!r}` and "
+        f"`session_id={payload.session_id!r}`."
     )
 
     messages: list[dict] = [
