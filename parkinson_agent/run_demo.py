@@ -25,6 +25,7 @@ from pathlib import Path
 
 from .agent import run_screening_agent, run_screening_agent_simple
 from .input_schema import KnowledgePayload
+from .render import render_report
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -62,7 +63,16 @@ def main() -> int:
     else:
         result = run_screening_agent(payload, model=model)
 
-    print(result.report.model_dump_json(indent=2))
+    # Clinician-facing report (formatted prose with numbers).
+    print()
+    print(render_report(result.report, payload))
+
+    # Persist machine-readable JSON next to the input for audit trail.
+    out_path = path.parent / f"report_{payload.session_id}.json"
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(result.report.model_dump_json(indent=2))
+    print()
+    print(f"[run_demo] Report JSON saved to: {out_path}")
     print(
         f"[run_demo] iterations={result.iterations}, "
         f"tool_calls={len(result.tool_calls)}"

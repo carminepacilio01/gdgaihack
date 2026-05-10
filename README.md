@@ -1,298 +1,168 @@
-# Parkinson Face Screening Agent — `data.json` → clinician report
+# Parkinson Face Screening Agent
 
-Hackathon project. Two clean stages:
+Local agentic pipeline that turns a patient's face capture into a
+structured screening report for the clinician — no cloud, no API keys,
+no patient data leaving the laptop.
 
-1. **Upstream model** (`models/`) — reads OAK landmark CSVs, computes
-   clinical features (regional motion, jaw tremor, mouth-corner asymmetry),
-   optionally runs a TCN classifier, writes `data.json`.
-2. **Agent** (`parkinson_agent/`) — reads only `data.json`, asks a local
-   Ollama LLM to interpret it in MDS-UPDRS terms, and produces a
-   structured screening report for the clinician.
+---
 
-The clinician makes the final call; this tool just **explains the
-upstream model's knowledge** so they can decide whether deeper
-assessment is warranted.
+## The problem
 
-The LLM runs **locally via Ollama** — no API keys, no per-call costs,
-patient data never leaves the laptop.
+Parkinson's Disease (PD) is currently screened in person, late, and
+qualitatively. Two motor signs from MDS-UPDRS Part III are detectable
+on the face alone:
 
-## Architecture
+- **Hypomimia (3.2)** — facial masking, reduced expressivity especially
+  in the lower face.
+- **Jaw rest tremor (3.17)** — rhythmic 4–6 Hz oscillation of the
+  jaw at rest.
+
+The premise of this project: a 60-second face capture is enough to flag
+patients who deserve in-person evaluation. The bottleneck is interpreting
+the numbers — that's the agent's job.
+
+---
+
+## Pipeline
 
 ```
-   ┌──────────────┐    ┌────────────────────┐    ┌─────────────────┐
-   │  OAK device  │ →  │  Landmark CSV      │ →  │  Upstream model │
-   │  (FaceMesh)  │    │  (per-frame x/y/z) │    │  (models/)      │
-   └──────────────┘    └────────────────────┘    └────────┬────────┘
-                                                          │ data.json
-                                                          ▼
+   ┌──────────────┐    ┌──────────────────┐    ┌─────────────────┐
+   │  OAK device  │ →  │  Landmark CSV    │ →  │  Upstream model │
+   │  (FaceMesh)  │    │  (per-frame x/y/z)│   │  (models/)      │
+   └──────────────┘    └──────────────────┘    └────────┬────────┘
+                                                        │ data.json
+                                                        ▼
                                           ┌──────────────────────────┐
-                                          │  Tools (read JSON)       │
-                                          │  - get_session_info      │
-                                          │  - get_regional_motion   │
-                                          │  - get_jaw_tremor        │
-                                          │  - get_mouth_asymmetry   │
-                                          │  - get_model_inference   │
+                                          │  LLM agent (Ollama)      │
+                                          │  reads data.json,        │
+                                          │  reasons MDS-UPDRS,       │
+                                          │  emits ScreeningReport   │
                                           └────────┬─────────────────┘
                                                    │
                                                    ▼
                                           ┌──────────────────┐
-                                          │  Ollama agent    │
-                                          │  (tool-use loop) │
-                                          └────────┬─────────┘
-                                                   │ submit_report
-                                                   ▼
-                                          ┌──────────────────┐
-                                          │ ScreeningReport  │
-                                          │ (Pydantic JSON)  │
+                                          │  Clinician view  │
+                                          │  (formatted text │
+                                          │   + JSON audit)  │
                                           └──────────────────┘
 ```
 
-The boundary between the two stages is `data.json`. Its schema is the
-single source of truth for the agent's input contract and lives in
+The boundary between hardware/signal stage and the reasoning stage is
+`data.json`. Its schema is documented in
 `parkinson_agent/input_schema.py` (`KnowledgePayload`).
 
-## Directory layout
+### Stage 1 — Capture (OAK + sparse landmarks)
 
-```
-gdgaihack/
-├── parkinson_agent/            # AGENT — reads data.json only
-│   ├── __init__.py
-│   ├── input_schema.py         # KnowledgePayload (data.json contract)
-│   ├── schemas.py              # ScreeningReport (output)
-│   ├── tools.py                # JSON section readers
-│   ├── agent.py                # Ollama tool-use loop
-│   └── run_demo.py             # CLI entry
-├── models/                     # UPSTREAM PIPELINE — CSV → data.json
-│   ├── generate_knowledge.py   # ← entry point (CSV → data.json)
-│   ├── dataset_preprocessing.py
-│   ├── model.py                # SmallPDTCN classifier
-│   ├── train.py                # Training script (produces .pth weights)
-│   └── preprocessed/
-├── data/                       # ALL DATA
-│   ├── data.json               # ← agent input (sample, regenerable)
-│   ├── raw/                    # raw OAK CSVs
-│   │   └── embed_2026-05-10_013137.csv
-│   └── master_dataset.csv      # training data (gitignored, 37MB)
-├── tests/
-├── clinician_ui.py             # Streamlit doctor-facing UI
-├── conftest.py
-├── requirements.txt
-├── .gitignore
-└── README.md
-```
+A Luxonis OAK camera runs MediaPipe FaceMesh on-device and emits a CSV
+with one row per frame. The dataset is **sparse** — ~108 of MediaPipe's
+478 landmarks, focused on the **lower face**: lips, jaw, mouth corners,
+nose bridge. No eyelid landmarks, no neck. Each row has `patient_id`,
+`visit_id`, timestamp `t`, optional `age`/`sex`/`label`, and the
+`x_{i}, y_{i}, z_{i}` coordinates.
 
-## Clinical scope
+### Stage 2 — Upstream model (CSV → data.json)
 
-Face only — no hand or gait. The agent reasons about:
+`models/generate_knowledge.py` ingests the CSV, anchors all landmarks to
+the nose bridge (removing rigid head motion), and computes three
+clinical features:
 
-| MDS-UPDRS item | Source in `data.json` | Tool |
+- **`regional_motion`** — for each anatomical region (chin/jaw,
+  lower_lip, upper_lip, mouth_corners, cheeks): peak-to-peak range of
+  motion, normalized by face size; plus a **composite expressivity
+  score**, a weighted average across regions.
+- **`jaw_tremor`** — Welch FFT on the chin centroid, 3–7 Hz band.
+  Reports dominant frequency, in-band power fraction, and spectral
+  peakedness.
+- **`mouth_asymmetry`** — left vs right mouth-corner range of motion
+  (landmarks 61 vs 291) → asymmetry ratio + less-mobile side.
+
+A future extension wires the trained TCN classifier (`models/model.py`,
+`train.py`) as `model_inference.pd_probability`. Not blocking for the
+agent.
+
+### Stage 3 — The agent (data.json → report)
+
+The agent reads only `data.json`. It runs against a **local Ollama
+model** (default `qwen2.5:1.5b`), interprets the upstream numbers
+against MDS-UPDRS criteria, and produces a `ScreeningReport` that
+contains: overall risk level, motor signs with side / severity /
+confidence / rationale, flagged findings, recommended follow-up, and
+clinician notes.
+
+---
+
+## Clinical priors (regional weights)
+
+Not all face regions are equally informative for PD screening. The
+upstream model applies these weights to the composite expressivity
+score:
+
+| Region | Weight | Rationale |
 |---|---|---|
-| 3.2  Hypomimia          | `clinical_features.regional_motion` | `get_regional_motion` |
-| 3.17 Rest tremor (jaw)  | `clinical_features.jaw_tremor`      | `get_jaw_tremor` |
-| Supportive: asymmetry   | `clinical_features.mouth_asymmetry` | `get_mouth_asymmetry` |
-| ML signal               | `model_inference` (optional)        | `get_model_inference` |
+| chin / jaw | **HIGH (1.0)** | jaw tremor + lower-face bradykinesia are primary PD signals |
+| lower lip | **HIGH (1.0)** | lower-face hypomimia is the most reliable face-only sign |
+| upper lip | MID (0.6) | involved but later in the disease |
+| mouth corners | MID (0.6) | asymmetry diagnostically useful |
+| cheeks | LOW-MID (0.4) | non-specific |
 
-**Not measured** because the OAK sparse landmark set lacks the points:
-- blink rate / eyelid hypokinesia (no eyelid landmarks)
-- neck (not in MediaPipe FaceMesh)
+**Not measured:**
+- *Eyelids / blink rate* — the OAK sparse landmark set lacks eye
+  contour points (159, 145, 386, 374). Reduced blink would be a useful
+  supportive sign but we cannot compute it reliably.
+- *Neck* — not in MediaPipe FaceMesh.
 
-The system prompt explicitly tells the agent these signals are
-unavailable so it doesn't fabricate them.
+The agent's system prompt explicitly tells the LLM these signals are
+unavailable so it does not fabricate them.
 
-### Regional weights (clinical priors)
+## Decision criteria the agent applies
 
-These are baked into the upstream pipeline (`generate_knowledge.REGION_WEIGHTS`)
-and surfaced to the agent through the `data.json`:
+- **Hypomimia detected** ↔ low `composite_expressivity_score` together
+  with reduced range of motion in HIGH-weight regions (chin/jaw and
+  lower lip).
+- **Jaw tremor detected** ↔ `dominant_frequency_hz ∈ [4.0, 6.0]` AND
+  `spectral_peakedness > 0.5` AND `in_band_fraction_of_total > 0.3`.
+- **Mouth-corner asymmetry detected** ↔ `asymmetry_ratio > 0.3`, with
+  `less_mobile_side` flagging the candidate side of unilateral onset.
+- **Overall risk**: `low` (no convincing signs) → `borderline` (one
+  weak sign or data-quality issues) → `elevated` (one strong sign or
+  multiple convergent signs).
 
-| Region | Weight |
-|---|---|
-| chin / jaw | **HIGH (1.0)** |
-| lower lip | **HIGH (1.0)** |
-| upper lip | MID (0.6) |
-| mouth corners | MID (0.6) |
-| cheeks | LOW-MID (0.4) |
+## Why a local LLM (Ollama)
 
-The composite expressivity score in `regional_motion` is a weighted
-average of normalized per-region range-of-motion using these weights.
-
----
-
-## Setup
-
-### 1. Install Python deps
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-```
-
-### 2. Install and run Ollama
-
-Download from https://ollama.com and start the server:
-
-```bash
-ollama serve &
-ollama pull llama3.2:3b      # recommended default — fast on CPU-only laptops
-```
-
-Override the model with `OLLAMA_MODEL=qwen2.5:3b`. For a remote Ollama
-box, set `OLLAMA_HOST=http://that-box:11434`.
-
-### 3. Generate `data.json` (one-time, regenerable)
-
-```bash
-.venv/bin/python -m models.generate_knowledge
-# → writes data/data.json from data/raw/embed_2026-05-10_013137.csv
-```
-
-You can pick a different patient/visit:
-
-```bash
-.venv/bin/python -m models.generate_knowledge \
-    --csv data/raw/your_capture.csv \
-    --patient demo_patient1 --visit 2026-05-10_013137 \
-    --out data/data.json
-```
-
-If a trained TCN checkpoint exists at `models/pd_tcn_weights.pth`,
-`generate_knowledge.py` will populate the `model_inference` section
-(currently a stub pending wire-up — see TODO in that file).
+- **Privacy by design:** patient data never leaves the laptop, no
+  third-party API.
+- **Zero per-call cost:** acceptable for a clinical setting that may
+  process many sessions.
+- **Reproducibility:** `temperature=0` + a small open model gives the
+  same input → the same report.
+- **Simple-mode loop:** for small CPU-only models (≤1.5B), the agent
+  runs as a single LLM call with the upstream JSON inlined in the
+  prompt and the report parsed back from the response. No tool-calling
+  grammar overhead. A `json-repair` fallback handles minor JSON glitches
+  small models occasionally produce.
 
 ---
 
-## How to run the agent
-
-### Option A — Streamlit UI (recommended for the demo)
+## Demo
 
 ```bash
-.venv/bin/streamlit run clinician_ui.py
+OLLAMA_MODEL=qwen2.5:1.5b .venv/bin/python -m parkinson_agent.run_demo --simple
 ```
 
-Sidebar lets you point at any `data.json` (default: `data/data.json`)
-or upload one. Click **Run screening**.
+The terminal prints a clinician-facing report:
 
-### Option B — CLI
+- **Header** — patient ID, session ID, capture stats, overall risk
+  badge (🟢 LOW / 🟡 BORDERLINE / 🔴 ELEVATED), asymmetry flag.
+- **Motor signs assessed** — for each sign: detection, side, severity
+  (0–4), confidence, supporting metrics with the actual numbers, and a
+  short clinical rationale.
+- **Flagged findings** and **Recommended follow-up** — bullet points
+  the doctor can act on immediately.
+- **Clinician notes** — 2–3 sentence summary readable in 15 seconds.
+- **Analyzed data** — the upstream raw numbers (composite score,
+  per-region RoM, tremor spectrum, asymmetry ratio) so the doctor can
+  audit any claim in the rationale.
+- **Data limitations** — explicit note about modalities not measured.
 
-```bash
-.venv/bin/python -m parkinson_agent.run_demo                 # data/data.json
-.venv/bin/python -m parkinson_agent.run_demo path/to/x.json  # custom payload
-```
-
-### Option C — Programmatic
-
-```python
-from parkinson_agent import KnowledgePayload, run_screening_agent
-
-payload = KnowledgePayload.from_json_file("data/data.json")
-result = run_screening_agent(payload, model="llama3.2:3b")
-print(result.report.model_dump_json(indent=2))
-```
-
----
-
-## Testing
-
-### Offline tests (zero LLM calls)
-
-```bash
-.venv/bin/pytest tests/ -v
-```
-
-Covers:
-- `KnowledgePayload` schema validation (sample + edge cases).
-- Agent tool dispatch, schema-validation retry, iteration cap,
-  unknown-tool handling, text-only nudge.
-- The new `get_model_inference` tool returning a graceful
-  `section_missing` marker when the upstream model didn't run.
-
-`tests/test_integration.py` is auto-skipped if Ollama is not reachable.
-
-### Live integration
-
-```bash
-ollama serve &
-ollama pull llama3.2:3b
-.venv/bin/pytest tests/test_integration.py -v
-```
-
----
-
-## `data.json` contract
-
-Top level (see `parkinson_agent/input_schema.py` for the Pydantic source):
-
-```jsonc
-{
-  "patient_id": "string",
-  "session_id": "string",
-  "captured_at": "2026-05-10T01:31:37Z",   // optional ISO-8601
-  "duration_s": 60.3,
-  "n_frames": 1054,
-  "fps": 17.4,
-  "metadata":         { "age": null, "sex": null, "ground_truth_label": null },
-  "regional_weights": { "chin_jaw": 1.0, "lower_lip": 1.0, "upper_lip": 0.6,
-                        "mouth_corners": 0.6, "cheeks": 0.4 },
-  "clinical_features": {
-    "regional_motion":  { /* per-region RoM + composite_expressivity_score */ },
-    "jaw_tremor":       { /* dominant_frequency_hz, in_band_fraction, ... */ },
-    "mouth_asymmetry":  { /* rom_left, rom_right, asymmetry_ratio, ...    */ }
-  },
-  "model_inference":  { "model_name": "SmallPDTCN", "pd_probability": 0.71, ... } | null,
-  "quality":          { "face_coverage": 0.96, "missing_modalities": [...] }
-}
-```
-
-Each section under `clinical_features` and `model_inference` may set
-`valid: false` with a `reason` if the upstream stage couldn't compute
-it; the agent records those as quality issues in the final report.
-
-If the upstream pipeline emits slightly different field names, edit
-`input_schema.py` and `models/generate_knowledge.py` together — they
-must agree.
-
----
-
-## Demo script suggestion
-
-For a 5-minute hackathon demo:
-
-1. **30s — context.** "PD screening today is in-person, late, qualitative.
-   Hypomimia and jaw tremor are detectable from the face alone."
-2. **1m — show the device.** OAK on a tripod. `models/generate_knowledge.py`
-   turns the capture CSV into `data.json`.
-3. **1m — show the agent.** Streamlit UI on `data.json`. The report
-   renders: risk level, motor signs, recommended follow-up. Audit
-   trail: every claim is backed by a numeric tool call.
-4. **1m — contrast.** Regenerate `data.json` from a different patient
-   or modify a value to see how the report changes.
-5. **1m — closing + Q&A.** What's NOT done: PPMI validation, regulatory
-   path. Wiring the trained TCN as the `model_inference` source is the
-   next step.
-
----
-
-## Design notes
-
-- **Why a hard JSON boundary:** the agent never has to know about
-  CSVs, FaceMesh, or signal processing. The upstream model can change
-  underneath as long as it keeps emitting the `KnowledgePayload`
-  contract.
-- **Why a terminal `submit_report` tool, not JSON-in-text:** structured
-  output via tool-use is the most reliable way to force schema-valid
-  output. The LLM literally cannot "submit" without producing an
-  object that matches the `ScreeningReport` JSON Schema.
-- **Why temperature=0 by default:** for medical decision-support
-  repeatability matters; same input, same report.
-- **Why local Ollama on `llama3.2:3b`:** no API keys, no per-call cost,
-  fast enough on CPU-only laptops, supports function calling. Patient
-  data never leaves the box.
-
-## Not in scope (yet)
-
-- Streaming output to the clinician UI while the agent works.
-- Multi-session longitudinal comparison.
-- Calibrated confidence vs a labeled dataset (PPMI / mPower).
-- Wiring the trained TCN inside `generate_knowledge._maybe_run_tcn`
-  (currently a stub returning a placeholder when weights exist).
-- The OAK-side capture pipeline. Wiring depthai + FaceMesh and
-  emitting the CSV is a separate workstream.
+The structured JSON of the same report is saved alongside `data.json`
+as `data/report_<session_id>.json` for downstream auditing.

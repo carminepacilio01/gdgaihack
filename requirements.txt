@@ -1,6 +1,7 @@
 # Agent runtime — what `parkinson_agent/` actually needs.
 ollama>=0.4.0
 pydantic>=2.7
+json-repair>=0.30   # auto-repair malformed JSON from small LLMs (simple mode)
 
 # Upstream pipeline (`models/generate_knowledge.py`) — CSV → data.json.
 numpy>=1.26
