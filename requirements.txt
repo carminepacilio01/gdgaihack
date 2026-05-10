@@ -1,13 +1,8 @@
 ollama>=0.4.0
 pydantic>=2.7
-numpy>=1.26
-scipy>=1.11
 
 # Testing
 pytest>=8.0
 
 # Demo UI (only needed if you run the Streamlit clinician view)
 streamlit>=1.32
-
-# Hardware capture (uncomment when wiring the real OAK pipeline)
-# depthai>=2.24

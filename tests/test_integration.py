@@ -35,24 +35,29 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_face_only_synthetic_session(session):
+def test_impaired_payload_flags_signs(payload):
     model = os.environ.get("OLLAMA_MODEL", "llama3.1")
-    result = run_screening_agent(session, model=model, max_iterations=12)
+    result = run_screening_agent(payload, model=model, max_iterations=12)
 
-    # Soft assertions: any clinically reasonable agent should at least
-    # flag SOMETHING on this synthetic patient (hypomimia + jaw tremor +
-    # left mouth asymmetry are all built into the data).
     report = result.report
     assert report.patient_id == "DEMO-P-0001"
     assert report.overall_risk_level.value in {"borderline", "elevated"}, (
-        f"Expected borderline/elevated for the impaired-face session, "
+        f"Expected borderline/elevated for the impaired payload, "
         f"got {report.overall_risk_level.value}"
     )
 
-    # The agent should have actually queried at least one face metric.
     called = {c["name"] for c in result.tool_calls}
     assert called & {
         "get_regional_motion",
         "get_jaw_tremor",
         "get_mouth_asymmetry",
     }, f"Agent did not call any face metric tool. Called: {called}"
+
+
+def test_healthy_payload_is_low_risk(healthy_payload):
+    model = os.environ.get("OLLAMA_MODEL", "llama3.1")
+    result = run_screening_agent(healthy_payload, model=model, max_iterations=12)
+
+    # On the healthy synthetic payload, a reasonable agent should land on
+    # 'low' (or at worst 'borderline' if it over-interprets normal variance).
+    assert result.report.overall_risk_level.value in {"low", "borderline"}

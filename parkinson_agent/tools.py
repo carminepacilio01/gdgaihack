@@ -1,10 +1,14 @@
 """Tool registry exposed to the LLM agent.
 
+The agent's data source is a `PatientMetricsPayload` (parsed from the JSON
+that OAK delivers). Tools are thin readers that surface one section of
+that payload at a time — the agent decides what to look at.
+
 Two layers:
 
-1. `make_tools(session)` returns a `(name -> callable)` map. Each callable
+1. `make_tools(payload)` returns a `(name -> callable)` map. Each callable
    takes a JSON-decoded `arguments` dict and returns a JSON-serializable
-   result. Closures over `session` so the agent never sees raw landmarks.
+   result. Closures over `payload`.
 
 2. `ANALYSIS_TOOL_SCHEMAS` is the OpenAI/Ollama-compatible tool schema list:
    `[{"type": "function", "function": {name, description, parameters}}]`.
@@ -18,51 +22,63 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from .oak_adapter import CaptureSession
+from .input_schema import PatientMetricsPayload
 from .schemas import ScreeningReport
-from .signal_processing import (
-    REGION_WEIGHTS,
-    blink_rate,
-    face_for_task,
-    jaw_tremor,
-    mouth_corner_asymmetry,
-    regional_motion,
-    session_summary,
-)
 
 
 ToolFn = Callable[[dict[str, Any]], Any]
 
 
-def make_tools(session: CaptureSession) -> dict[str, ToolFn]:
-    """Build the per-session tool registry. Closes over session."""
+def _missing(field: str) -> dict:
+    return {
+        "valid": False,
+        "reason": f"metric_missing_in_payload:{field}",
+    }
+
+
+def make_tools(payload: PatientMetricsPayload) -> dict[str, ToolFn]:
+    """Build the per-payload tool registry. Closes over `payload`."""
 
     def _get_session_info(_: dict) -> dict:
-        return session_summary(session)
+        return {
+            "patient_id": payload.patient_id,
+            "session_id": payload.session_id,
+            "captured_at": payload.captured_at,
+            "duration_s": payload.duration_s,
+            "capture_fps": payload.capture_fps,
+            "device": payload.device,
+            "face_coverage": payload.face_coverage,
+            "tasks": [t.model_dump() for t in payload.tasks],
+            "regional_weights": payload.regional_weights,
+            "available_metrics": [
+                k for k, v in payload.metrics.model_dump(exclude_none=True).items()
+                if v is not None
+            ],
+        }
 
-    def _get_regional_motion(args: dict) -> dict:
-        face = face_for_task(session, args.get("task"))
-        return regional_motion(face)
+    def _get_regional_motion(_: dict) -> dict:
+        m = payload.metrics.regional_motion
+        if m is None:
+            return _missing("regional_motion")
+        return m.model_dump(exclude_none=True)
 
-    def _get_jaw_tremor(args: dict) -> dict:
-        # Tremor is best assessed at rest. Default to the rest task if available.
-        task = args.get("task") or "rest_seated"
-        face = face_for_task(session, task)
-        if face is None:
-            face = session.face
-        return jaw_tremor(face)
+    def _get_jaw_tremor(_: dict) -> dict:
+        m = payload.metrics.jaw_tremor
+        if m is None:
+            return _missing("jaw_tremor")
+        return m.model_dump(exclude_none=True)
 
-    def _get_blink_rate(args: dict) -> dict:
-        face = face_for_task(session, args.get("task"))
-        return blink_rate(face)
+    def _get_blink_rate(_: dict) -> dict:
+        m = payload.metrics.blink_rate
+        if m is None:
+            return _missing("blink_rate")
+        return m.model_dump(exclude_none=True)
 
-    def _get_mouth_asymmetry(args: dict) -> dict:
-        # Asymmetry is best read during expression task.
-        task = args.get("task") or "facial_expression"
-        face = face_for_task(session, task)
-        if face is None:
-            face = session.face
-        return mouth_corner_asymmetry(face)
+    def _get_mouth_asymmetry(_: dict) -> dict:
+        m = payload.metrics.mouth_asymmetry
+        if m is None:
+            return _missing("mouth_asymmetry")
+        return m.model_dump(exclude_none=True)
 
     return {
         "get_session_info": _get_session_info,
@@ -77,26 +93,16 @@ def make_tools(session: CaptureSession) -> dict[str, ToolFn]:
 # Tool schemas (OpenAI / Ollama function-calling format).
 # ---------------------------------------------------------------------------
 
-_TASK_PARAM = {
-    "type": "string",
-    "description": (
-        "Optional capture-task name to restrict the analysis window "
-        "(e.g. 'rest_seated', 'facial_expression', 'speech'). "
-        "Omit to analyze the full session."
-    ),
-}
-
-
 ANALYSIS_TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
             "name": "get_session_info",
             "description": (
-                "Return high-level metadata about the capture: patient_id, "
+                "Return high-level metadata for the capture: patient_id, "
                 "session_id, duration, FPS, available tasks, face coverage, "
-                "and the regional clinical weights used downstream. Call this "
-                "first to orient yourself before requesting metrics."
+                "the regional clinical weights, and which metric sections "
+                "the payload contains. Call this first to orient yourself."
             ),
             "parameters": {"type": "object", "properties": {}},
         },
@@ -106,18 +112,15 @@ ANALYSIS_TOOL_SCHEMAS: list[dict] = [
         "function": {
             "name": "get_regional_motion",
             "description": (
-                "Range-of-motion and velocity per facial region "
-                "(chin/jaw, lower lip, upper lip, mouth corners, cheeks, "
-                "eyelids, neck), each tagged with its clinical weight. "
-                "Returns a `composite_expressivity_score` (weighted average "
-                "of normalized region RoM). Lower is more suggestive of "
-                "MDS-UPDRS 3.2 hypomimia. Call during the 'facial_expression' "
-                "task for the most informative signal."
+                "Per-region range-of-motion and velocity (chin/jaw, lower lip, "
+                "upper lip, mouth corners, cheeks, eyelids, neck), each tagged "
+                "with its clinical weight, plus a `composite_expressivity_score` "
+                "(weighted average of normalized region RoM). Lower composite "
+                "is more suggestive of MDS-UPDRS 3.2 hypomimia. Reduced motion "
+                "in HIGH-weight regions (chin/jaw, lower lip) is the strongest "
+                "face-only signal."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {"task": _TASK_PARAM},
-            },
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -125,17 +128,13 @@ ANALYSIS_TOOL_SCHEMAS: list[dict] = [
         "function": {
             "name": "get_jaw_tremor",
             "description": (
-                "Spectral analysis of chin motion (anchored to the inter-ocular "
-                "midline to remove head sway) in the 3–7 Hz band. Reports the "
+                "Spectral analysis of chin motion in the 3–7 Hz band. Fields: "
                 "dominant frequency, whether it falls in the parkinsonian "
                 "4–6 Hz range, the in-band power fraction, and spectral "
                 "peakedness. Best evaluated during 'rest_seated'. Maps to "
                 "MDS-UPDRS 3.17 (rest tremor, jaw)."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {"task": _TASK_PARAM},
-            },
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -143,16 +142,13 @@ ANALYSIS_TOOL_SCHEMAS: list[dict] = [
         "function": {
             "name": "get_blink_rate",
             "description": (
-                "Blinks per minute over the requested window. Adult resting "
-                "norms are ~15–20/min; sustained values <8/min are supportive "
-                "of MDS-UPDRS 3.2 hypomimia. Eyelids are LOW-weight in our "
+                "Blinks per minute over the session. Adult resting norms are "
+                "~15–20/min; sustained values <8/min are supportive of "
+                "MDS-UPDRS 3.2 hypomimia. Eyelids carry a LOW weight in our "
                 "regional priors — treat reduced blink as supportive evidence, "
                 "not a primary signal."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {"task": _TASK_PARAM},
-            },
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -163,13 +159,9 @@ ANALYSIS_TOOL_SCHEMAS: list[dict] = [
                 "Compare left vs right mouth-corner range of motion. Returns "
                 "the side with reduced mobility and a normalized asymmetry "
                 "ratio in [0, 1]. Asymmetric facial bradykinesia (>0.3) is "
-                "consistent with unilateral PD onset. Best evaluated during "
-                "'facial_expression'."
+                "consistent with unilateral PD onset."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {"task": _TASK_PARAM},
-            },
+            "parameters": {"type": "object", "properties": {}},
         },
     },
 ]
@@ -180,12 +172,7 @@ ANALYSIS_TOOL_SCHEMAS: list[dict] = [
 # ---------------------------------------------------------------------------
 
 def submit_report_schema() -> dict:
-    """Build the submit_report tool schema from the Pydantic model.
-
-    We pass `ScreeningReport.model_json_schema()` directly as the `parameters`
-    block. The model is forced to populate every required field before it
-    can call the tool, which is exactly the structured-output contract.
-    """
+    """Build the submit_report tool schema from the Pydantic model."""
     schema = ScreeningReport.model_json_schema()
     return {
         "type": "function",
@@ -197,7 +184,8 @@ def submit_report_schema() -> dict:
                 "the patient. After this call the session ends. Populate "
                 "`motor_signs` only with signs you have direct numeric "
                 "evidence for; mark `detected: false` when you ruled a sign "
-                "out. Cite the tool names in `evidence_tool_calls`."
+                "out. Cite the tool names in `evidence_tool_calls`. The "
+                "report is shown to the clinician — be clear and conservative."
             ),
             "parameters": schema,
         },
@@ -209,10 +197,8 @@ def all_tool_schemas() -> list[dict]:
     return [*ANALYSIS_TOOL_SCHEMAS, submit_report_schema()]
 
 
-# Re-export so callers can introspect.
 __all__ = [
     "ANALYSIS_TOOL_SCHEMAS",
-    "REGION_WEIGHTS",
     "all_tool_schemas",
     "make_tools",
     "submit_report_schema",

@@ -18,7 +18,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .oak_adapter import CaptureSession
+from .input_schema import PatientMetricsPayload
 from .schemas import ScreeningReport
 from .tools import all_tool_schemas, make_tools
 
@@ -26,10 +26,11 @@ from .tools import all_tool_schemas, make_tools
 SYSTEM_PROMPT = """\
 You are a clinical screening assistant for early Parkinson's disease.
 
-You receive a capture session from a Luxonis OAK camera that recorded the
-patient's FACE only — there is no hand or gait data. You analyze the
-session by calling tools that return numeric features. You never see raw
-landmarks; you only see the tool outputs.
+Your input is a structured JSON payload that a Luxonis OAK device produced
+from a face-only capture session. You do NOT see raw video or landmarks —
+only pre-computed numeric metrics. Your job is to inspect those numbers,
+explain what they mean in MDS-UPDRS terms, and produce a structured report
+that helps a clinician decide whether deeper assessment is warranted.
 
 CLINICAL TARGETS (MDS-UPDRS Part III, face-only subset):
 - 3.2  Hypomimia (facial masking) — primary screening target.
@@ -46,10 +47,9 @@ these weights. Treat low-weight regions as supportive, not primary.
 
 PROCEDURE:
 1. Call `get_session_info` first.
-2. Call `get_regional_motion` (during 'facial_expression' if available).
-3. Call `get_jaw_tremor` (during 'rest_seated' if available).
-4. Call `get_blink_rate` and `get_mouth_asymmetry` for supportive evidence.
-5. Reason about the numbers, then call `submit_report` exactly once.
+2. Call `get_regional_motion`, `get_jaw_tremor`, `get_blink_rate`, and
+   `get_mouth_asymmetry` to build a complete picture.
+3. Reason about the numbers, then call `submit_report` exactly once.
 
 REPORT GUIDANCE:
 - `overall_risk_level`:
@@ -62,6 +62,7 @@ REPORT GUIDANCE:
 - If a tool returns `valid: false`, log a `quality_issues` entry and avoid
   asserting that sign with high confidence.
 - Be conservative. This is screening for clinician review, not diagnosis.
+- Write `clinician_notes` so a busy doctor can read it in 15 seconds.
 """
 
 
@@ -94,7 +95,6 @@ def _extract_message(response: Any) -> dict:
     else:
         msg = getattr(response, "message", {})
     if not isinstance(msg, dict):
-        # pydantic-style: convert to dict
         msg = msg.model_dump() if hasattr(msg, "model_dump") else dict(msg)
     return msg
 
@@ -117,7 +117,7 @@ def _tool_call_args(tc: Any) -> tuple[str, dict]:
 
 
 def run_screening_agent(
-    session: CaptureSession,
+    payload: PatientMetricsPayload,
     *,
     client: Any = None,
     model: str | None = None,
@@ -128,8 +128,8 @@ def run_screening_agent(
 
     Parameters
     ----------
-    session : CaptureSession
-        The capture to analyze.
+    payload : PatientMetricsPayload
+        The OAK-emitted JSON payload, already validated.
     client : Any, optional
         Anything with `.chat(model=..., messages=..., tools=..., options=...)`
         returning an Ollama-shaped response. Defaults to a real Ollama client.
@@ -145,13 +145,14 @@ def run_screening_agent(
     if model is None:
         model = os.environ.get("OLLAMA_MODEL", "llama3.1")
 
-    tool_registry = make_tools(session)
+    tool_registry = make_tools(payload)
     tool_schemas = all_tool_schemas()
 
     user_prompt = (
-        f"Screen patient {session.patient_id} (session {session.session_id}). "
-        f"Capture duration: {session.duration_s:.1f}s. "
-        f"Use the tools to inspect the data, then submit a structured report."
+        f"Screen patient {payload.patient_id} (session {payload.session_id}). "
+        f"Capture duration: {payload.duration_s:.1f}s. "
+        f"Use the tools to inspect the metrics, then submit a structured report "
+        f"that the clinician will read."
     )
 
     messages: list[dict] = [
@@ -172,7 +173,6 @@ def run_screening_agent(
         msg = _extract_message(response)
         transcript.append({"iteration": iteration, "message": msg})
 
-        # Persist the assistant turn so the next request has full history.
         messages.append({
             "role": "assistant",
             "content": msg.get("content", "") or "",
@@ -181,7 +181,6 @@ def run_screening_agent(
 
         tool_calls = msg.get("tool_calls") or []
         if not tool_calls:
-            # The model didn't call a tool. Nudge it back on rails.
             messages.append({
                 "role": "user",
                 "content": (
@@ -229,7 +228,7 @@ def run_screening_agent(
             else:
                 try:
                     result = fn(args)
-                except Exception as exc:  # surfaces to the model as a tool error
+                except Exception as exc:
                     result = {"error": "tool_exception", "detail": str(exc)}
 
             tool_calls_log.append({"name": name, "input": args, "result": result})
