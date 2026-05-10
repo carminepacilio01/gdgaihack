@@ -1,0 +1,1222 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>NeuroVista — clinician dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    :root {
+      /* Pitch-deck palette: deep navy near-black, sparing cyan accents */
+      --bg: #0A1230;           /* deep navy near-black (page bg) */
+      --bg-2: #0E1738;         /* page surfaces (subtle layered) */
+      --panel: #11193D;        /* primary surface (cards) */
+      --panel-elev: #182250;   /* elevated surface (modals, hover) */
+      --border: rgba(64, 112, 220, 0.22);   /* subtle divider */
+      --border-strong: rgba(64, 112, 220, 0.45);
+      --text: #EAF4FF;         /* near-white body text */
+      --muted: #7A8FB8;        /* muted blue-gray for secondary */
+      --mono: #5C7CB8;         /* mono labels / index */
+      --accent: #22DDFF;       /* cyan — used SPARINGLY for highlights */
+      --accent-2: #5A8FFF;     /* mid-blue */
+      --accent-deep: #3D5BD9;  /* deeper interactive blue */
+      /* Semantic biomarker status */
+      --green: #00E5A0;
+      --amber: #FFC857;
+      --red: #FF5470;
+      /* Mono font stack for metadata labels (01 — THE PROBLEM, etc.) */
+      --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 0;
+      background-color: var(--bg);
+      /* Subtle 40-px grid pattern, like the pitch deck background */
+      background-image:
+        linear-gradient(rgba(90, 143, 255, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(90, 143, 255, 0.04) 1px, transparent 1px);
+      background-size: 40px 40px;
+      color: var(--text);
+      font-family: var(--font-sans);
+      letter-spacing: -0.005em;
+    }
+    header {
+      padding: 16px 32px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 22px;
+      background: rgba(10, 18, 48, 0.7);
+      backdrop-filter: blur(10px);
+      position: sticky; top: 0; z-index: 9;
+    }
+    .logo {
+      display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+    }
+    .logo-mark { width: 28px; height: 28px; flex-shrink: 0; }
+    .logo-text {
+      font-weight: 600; font-size: 15px; color: var(--text);
+      letter-spacing: -0.01em;
+    }
+    .logo-sep { color: var(--mono); font-size: 13px; margin: 0 6px; }
+    h1 { margin: 0; font-size: 13px; font-weight: 400; color: var(--muted); }
+    h1 .sub { color: var(--muted); font-weight: 400; margin-left: 6px; font-size: 13px; }
+    select, button {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border-strong);
+      padding: 7px 14px; border-radius: 4px;
+      font-size: 12px; font-family: var(--font-sans);
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    select { background: var(--panel); }
+    select:hover, button:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    button:active { transform: translateY(1px); }
+    button.primary {
+      background: var(--accent); color: #07112E; border-color: var(--accent);
+      font-weight: 600;
+    }
+    button.primary:hover {
+      background: #4DEAFF; border-color: #4DEAFF; color: #07112E;
+    }
+    main { padding: 32px 32px 60px; }
+    .summary {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 8px;
+    }
+    .section-title {
+      font-family: var(--font-mono);
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.14em;
+      color: var(--mono); margin: 36px 0 14px; font-weight: 500;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .section-title::before {
+      content: ""; display: inline-block; width: 24px; height: 1px;
+      background: var(--accent);
+    }
+    .badge-synthetic {
+      display: inline-block; margin-left: 12px; padding: 3px 10px; font-size: 10px;
+      font-family: var(--font-mono); letter-spacing: 0.1em;
+      background: rgba(255, 200, 87, 0.10); color: var(--amber);
+      border: 1px solid rgba(255, 200, 87, 0.4); border-radius: 2px;
+    }
+    .card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+      padding: 16px 18px;
+    }
+    .card .label {
+      color: var(--mono); font-size: 10px;
+      font-family: var(--font-mono);
+      text-transform: uppercase; letter-spacing: 0.12em;
+    }
+    .card .value {
+      font-size: 28px; font-weight: 500; margin-top: 8px; color: var(--text);
+      letter-spacing: -0.02em;
+    }
+    .card .delta { font-size: 12px; margin-top: 6px; font-family: var(--font-mono); letter-spacing: 0.02em; }
+    .delta.up   { color: var(--red); }
+    .delta.down { color: var(--green); }
+    .delta.flat { color: var(--muted); }
+    .grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+    }
+    .chart {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+      padding: 14px; height: 320px;
+    }
+    .chart h3 {
+      margin: 0 0 10px; font-size: 12px; color: var(--text); font-weight: 500;
+    }
+    .empty {
+      text-align: center; padding: 80px; color: var(--muted);
+      background: var(--panel); border: 1px dashed var(--border); border-radius: 6px;
+    }
+    .disclaimer {
+      margin-top: 36px; padding: 14px 18px;
+      border-left: 2px solid var(--accent);
+      background: rgba(34, 221, 255, 0.04); color: var(--muted);
+      font-size: 11px; line-height: 1.5;
+      font-family: var(--font-mono); letter-spacing: 0.02em;
+    }
+    #record-banner {
+      display: none; position: sticky; top: 60px; z-index: 8;
+      padding: 12px 32px;
+      background: rgba(255, 84, 112, 0.08);
+      border-bottom: 1px solid rgba(255, 84, 112, 0.35);
+      color: var(--text);
+      font-size: 12px; font-family: var(--font-mono); letter-spacing: 0.02em;
+      backdrop-filter: blur(10px);
+    }
+    #record-banner.success { background: rgba(0, 229, 160, 0.08); border-bottom-color: rgba(0, 229, 160, 0.35); }
+    #record-banner.error   { background: rgba(255, 84, 112, 0.14); }
+    #record-banner .progress {
+      height: 2px; margin-top: 8px; background: rgba(255,255,255,0.06); border-radius: 1px; overflow: hidden;
+    }
+    #record-banner .progress > div { height: 100%; background: var(--red); width: 0%; transition: width 0.5s linear; }
+    #record-banner.success .progress > div { background: var(--green); }
+    /* Baseline modal */
+    .modal-mask {
+      display: none; position: fixed; inset: 0; background: rgba(5, 10, 28, 0.82);
+      z-index: 100; align-items: center; justify-content: center;
+      backdrop-filter: blur(8px);
+    }
+    .modal-mask.show { display: flex; }
+    .modal {
+      background: var(--panel-elev);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      padding: 28px 32px; width: 500px; max-width: calc(100% - 40px);
+      box-shadow: 0 30px 100px rgba(0, 0, 30, 0.7);
+    }
+    .modal h2 {
+      margin: 0 0 6px; font-size: 18px; color: var(--text);
+      font-weight: 500; letter-spacing: -0.01em;
+    }
+    .modal h3 {
+      margin: 22px 0 10px; font-size: 10px; color: var(--mono);
+      font-family: var(--font-mono);
+      text-transform: uppercase; letter-spacing: 0.14em;
+      font-weight: 500;
+    }
+    .modal label {
+      display: block; font-size: 10px; color: var(--mono); margin: 10px 0 6px;
+      font-family: var(--font-mono); letter-spacing: 0.10em; text-transform: uppercase;
+    }
+    .modal input, .modal select {
+      width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border-strong);
+      border-radius: 4px; padding: 9px 12px; font-size: 13px; box-sizing: border-box;
+      font-family: var(--font-sans);
+    }
+    .modal input:focus, .modal select:focus {
+      outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px rgba(34,221,255,0.25);
+    }
+    .modal .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .modal .actions { margin-top: 22px; display: flex; gap: 10px; justify-content: flex-end; }
+    .modal .stage {
+      padding: 12px 16px; margin: 10px 0; border-radius: 4px;
+      background: rgba(34, 221, 255, 0.05);
+      border-left: 2px solid rgba(34, 221, 255, 0.4);
+    }
+    .modal .stage.done { background: rgba(0, 229, 160, 0.06); border-left-color: var(--green); }
+    .modal .stage.active { background: rgba(255, 200, 87, 0.08); border-left-color: var(--amber); }
+    .modal .stage h4 { margin: 0 0 4px; font-size: 13px; font-weight: 500; }
+    .modal .stage p { margin: 0; font-size: 11px; color: var(--muted); line-height: 1.5; }
+    .modal .timer {
+      font-size: 22px; font-weight: 500; text-align: center;
+      margin: 10px 0; color: var(--amber);
+      font-family: var(--font-mono); letter-spacing: 0.04em;
+    }
+    /* Recordings table */
+    .recordings {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+      margin: 0 0 14px; overflow: hidden;
+    }
+    .recordings table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .recordings th {
+      text-align: left; padding: 12px 14px; color: var(--mono);
+      font-family: var(--font-mono);
+      font-weight: 500; text-transform: uppercase; letter-spacing: 0.10em;
+      font-size: 10px; border-bottom: 1px solid var(--border);
+      background: transparent;
+    }
+    .recordings td {
+      padding: 11px 14px; border-bottom: 1px solid var(--border);
+      color: var(--text); font-size: 12px;
+    }
+    .recordings tr:last-child td { border-bottom: none; }
+    .recordings tr.row-hover:hover { background: rgba(34, 221, 255, 0.04); cursor: pointer; }
+    .recordings .state-pill {
+      display: inline-block; padding: 3px 10px; border-radius: 2px;
+      font-size: 10px; font-weight: 500;
+      font-family: var(--font-mono); letter-spacing: 0.10em;
+      text-transform: uppercase;
+    }
+    .state-rest  { background: rgba(141, 181, 240, 0.10); color: var(--muted);
+                   border: 1px solid rgba(141, 181, 240, 0.3); }
+    .state-talk  { background: rgba(255, 200, 87, 0.08); color: var(--amber);
+                   border: 1px solid rgba(255, 200, 87, 0.3); }
+    .state-smile { background: rgba(0, 229, 160, 0.08); color: var(--green);
+                   border: 1px solid rgba(0, 229, 160, 0.3); }
+    .state-visit { background: rgba(34, 221, 255, 0.08); color: var(--accent);
+                   border: 1px solid rgba(34, 221, 255, 0.3); }
+    .recordings .delete-btn {
+      background: transparent;
+      border: 1px solid rgba(255, 84, 112, 0.35);
+      color: var(--red);
+      padding: 4px 10px; font-size: 11px; border-radius: 3px; cursor: pointer;
+      font-family: var(--font-mono); letter-spacing: 0.05em;
+    }
+    .recordings .delete-btn:hover { background: rgba(255, 84, 112, 0.12); border-color: var(--red); }
+    /* View toggle (Daily / Entry) */
+    .view-toggle {
+      display: inline-flex; border: 1px solid var(--border-strong);
+      border-radius: 4px; overflow: hidden;
+    }
+    .view-toggle .view-btn {
+      background: transparent; border: none; color: var(--muted);
+      padding: 6px 14px; font-size: 11px; font-family: var(--font-mono);
+      letter-spacing: 0.06em; cursor: pointer;
+      border-radius: 0;
+      border-right: 1px solid var(--border-strong);
+    }
+    .view-toggle .view-btn:last-child { border-right: none; }
+    .view-toggle .view-btn:hover { color: var(--accent); background: rgba(34,221,255,0.04); }
+    .view-toggle .view-btn.active {
+      background: rgba(34, 221, 255, 0.10);
+      color: var(--accent);
+    }
+    /* Entry sparkline charts: smaller, denser */
+    .chart.entry h3 { display: flex; justify-content: space-between; align-items: baseline; }
+    .chart.entry h3 .stat-mean { color: var(--accent); font-family: var(--font-mono); font-size: 11px; }
+    .modal-detail { width: 720px; max-height: 80vh; overflow-y: auto; }
+    .modal-detail dl { display: grid; grid-template-columns: max-content 1fr;
+                       gap: 4px 16px; font-size: 12px; }
+    .modal-detail dt { color: var(--muted); }
+    .modal-detail dd { margin: 0; font-family: ui-monospace, monospace; color: var(--accent); }
+    .modal-detail h3 { margin: 18px 0 8px; font-size: 13px; color: var(--accent);
+                       text-transform: uppercase; letter-spacing: 0.06em; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">
+      <svg class="logo-mark" viewBox="0 0 60 40" xmlns="http://www.w3.org/2000/svg" aria-label="NeuroVista logo">
+        <circle cx="35" cy="20" r="20" fill="#0F1A45"/>
+        <circle cx="14" cy="22" r="8"  fill="#22DDFF"/>
+        <circle cx="28" cy="18" r="9"  fill="#5A8FFF"/>
+        <circle cx="44" cy="18" r="10" fill="#3D5BD9"/>
+      </svg>
+      <span class="logo-text">NeuroVista</span>
+      <span class="logo-sep">·</span>
+      <span style="color:var(--muted);font-size:13px;">Parkinson Screening</span>
+    </div>
+    <label style="color:var(--mono);font-size:11px;font-family:var(--font-mono);letter-spacing:0.10em;text-transform:uppercase;display:flex;align-items:center;gap:8px;">
+      Patient
+      <select id="patient-select">
+        {% for p in patients %}
+          <option value="{{ p }}" {% if p == current %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button id="refresh">Refresh</button>
+    <button id="csv">Download log CSV</button>
+    <button id="pdf" class="primary">Download PDF report</button>
+    <button id="record" style="background: rgba(255,84,112,0.10); border-color: rgba(255,84,112,0.45); color: var(--red);">● Record visit</button>
+    <button id="baseline" style="background: rgba(34,221,255,0.08); border-color: rgba(34,221,255,0.40); color: var(--accent);">Run baseline</button>
+    <button id="reboot" title="Soft-reboot OAK device when X_LINK_DEVICE_NOT_FOUND errors appear">↻ Reboot OAK</button>
+    <div id="meta" style="color: var(--muted); font-size: 13px; margin-left: auto;"></div>
+  </header>
+
+  <div id="record-banner">
+    <div style="display:flex;align-items:center;gap:14px;">
+      <div id="record-status" style="flex:1;">Recording…</div>
+      <button id="record-cancel" style="background: var(--red); border-color: var(--red); color: white; font-weight: 600;">✕ Stop &amp; discard</button>
+    </div>
+    <div class="progress"><div id="record-bar"></div></div>
+  </div>
+
+  <!-- Record visit modal (mirrors baseline modal style) -->
+  <div id="rec-modal" class="modal-mask">
+    <div class="modal">
+      <h2>● Record visit</h2>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">
+        Standalone visit recording. Saves a per-frame biomarker CSV, a
+        landmark-embedding CSV (lower face only), and appends to the master
+        cross-patient dataset. Use this for free-form data collection.
+      </p>
+      <h3>Patient metadata</h3>
+      <label>Patient name (alias)</label>
+      <input id="rec-patient" type="text" placeholder="e.g. p_001 / mario / volunteer_3">
+      <div id="rec-num-hint" style="font-size:11px;color:var(--muted);margin-top:4px;"></div>
+      <div class="row">
+        <div>
+          <label>Sex</label>
+          <select id="rec-sex">
+            <option value="">—</option>
+            <option value="0">M</option>
+            <option value="1">F</option>
+          </select>
+        </div>
+        <div>
+          <label>Age (years)</label>
+          <input id="rec-age" type="number" min="1" max="120">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Ground-truth label</label>
+          <select id="rec-label">
+            <option value="">— unknown</option>
+            <option value="0">0 — no Parkinson</option>
+            <option value="1">1 — Parkinson</option>
+          </select>
+        </div>
+        <div>
+          <label>Duration (s)</label>
+          <input id="rec-duration" type="number" min="5" max="600" value="60">
+        </div>
+      </div>
+      <input id="rec-voice" type="hidden" value="">
+      <div class="actions">
+        <button id="rec-cancel">Cancel</button>
+        <button id="rec-start" class="primary">● Start recording</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recording detail modal -->
+  <div id="detail-modal" class="modal-mask">
+    <div class="modal modal-detail">
+      <h2 id="detail-title">Recording details</h2>
+      <div id="detail-body"></div>
+      <div class="actions">
+        <button id="detail-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Baseline wizard modal -->
+  <div id="baseline-modal" class="modal-mask">
+    <div class="modal">
+      <h2>⚙ Baseline calibration — rest / talk / smile</h2>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">
+        Builds a personal facial signature for the patient by recording three short
+        states. The pipeline then subtracts the baseline tremor noise floor at scoring
+        time, reducing false positives while keeping high sensitivity.
+      </p>
+
+      <div id="baseline-form">
+        <h3>Patient metadata</h3>
+        <label>Patient ID</label>
+        <input id="bl-patient" type="text" placeholder="e.g. p_001">
+        <div class="row">
+          <div>
+            <label>Sex</label>
+            <select id="bl-sex">
+              <option value="">—</option>
+              <option value="0">M</option>
+              <option value="1">F</option>
+            </select>
+          </div>
+          <div>
+            <label>Age (years)</label>
+            <input id="bl-age" type="number" min="1" max="120">
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>Ground truth label</label>
+            <select id="bl-label">
+              <option value="">—</option>
+              <option value="0">0 = no PD</option>
+              <option value="1">1 = PD</option>
+            </select>
+          </div>
+          <div>
+            <label>Stage duration (s)</label>
+            <input id="bl-duration" type="number" min="5" max="60" value="10">
+          </div>
+        </div>
+        <div class="actions">
+          <button id="bl-cancel">Cancel</button>
+          <button id="bl-start" class="primary">Start baseline</button>
+        </div>
+      </div>
+
+      <div id="baseline-progress" style="display:none;">
+        <h3>Recording stages</h3>
+        <div id="bl-stage-rest" class="stage">
+          <h4>1 · Rest</h4>
+          <p>Sit comfortably, look straight at the camera, do not move or speak.</p>
+        </div>
+        <div id="bl-stage-talk" class="stage">
+          <h4>2 · Talk</h4>
+          <p>Read the rainbow passage out loud at normal speed.</p>
+        </div>
+        <div id="bl-stage-smile" class="stage">
+          <h4>3 · Smile</h4>
+          <p>Hold a natural smile, eyes open, head still.</p>
+        </div>
+        <div class="timer" id="bl-timer">—</div>
+        <div class="actions">
+          <button id="bl-cancel-running" style="background: var(--red); border-color: var(--red); color: white; font-weight: 600;">✕ Cancel baseline</button>
+          <button id="bl-close" disabled>Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <main id="main">
+    <div id="empty" class="empty">Select a patient to load visits.</div>
+    <div id="content" style="display:none;">
+      <section class="summary" id="summary"></section>
+
+      <div class="section-title">Recordings</div>
+      <section class="recordings">
+        <table>
+          <thead>
+            <tr>
+              <th>Visit ID</th>
+              <th>State</th>
+              <th>Recorded</th>
+              <th>Duration</th>
+              <th>Frames</th>
+              <th>Blink</th>
+              <th>Smile mm</th>
+              <th>Asymmetry</th>
+              <th>PD%</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="recordings-body"></tbody>
+        </table>
+      </section>
+
+      <div class="section-title" style="display:flex;align-items:center;gap:18px;justify-content:space-between;">
+        <span>Facial biomarkers (on-device, OAK 4 D)</span>
+        <span style="display:flex;align-items:center;gap:10px;text-transform:none;letter-spacing:normal;font-family:var(--font-sans);font-size:11px;color:var(--muted);">
+          <span class="view-toggle" id="view-toggle">
+            <button class="view-btn active" data-view="daily">Daily — across visits</button>
+            <button class="view-btn" data-view="entry">Entry — per-frame</button>
+          </span>
+          <select id="entry-visit-select" style="display:none;font-size:11px;padding:5px 10px;"></select>
+        </span>
+      </div>
+      <section class="grid" id="charts-facial"></section>
+      <p class="disclaimer">
+        Research / screening prototype — not a medical device. Clinical
+        interpretation requires a licensed neurologist.
+        <br><span style="color:var(--mono);">References ·
+        Karson 1983 · Bologna 2013 · Djaldetti 2006 · Rusz 2011 · Goberman 2002 · Skodda 2011</span>
+      </p>
+    </div>
+    <footer style="margin-top:48px;padding:18px 0;border-top:1px solid var(--border);
+                   display:flex;justify-content:space-between;align-items:center;
+                   font-family:var(--font-mono);font-size:10px;
+                   letter-spacing:0.10em;color:var(--mono);text-transform:uppercase;">
+      <span>NeuroVista · longitudinal screening · on-device · privacy-first</span>
+      <span>GDG AI Hack 2026 · Track B · Luxonis OAK 4 D</span>
+    </footer>
+  </main>
+
+<script>
+const FACIAL_METRICS = [
+  { key: "blink_rate",                label: "Blink rate",         unit: "/min",
+    range: [12, 22], lower_is_worse: true },
+  { key: "smile_amplitude_mm",        label: "Smile amplitude",    unit: "mm",
+    range: [35, 60], lower_is_worse: true },
+  { key: "brow_amplitude_mm",         label: "Brow amplitude",     unit: "mm",
+    range: [3, 12],  lower_is_worse: true },
+  { key: "asymmetry",                 label: "Facial asymmetry",   unit: "",
+    range: [0, 0.05], lower_is_worse: false },
+  { key: "gaze_x_std",                label: "Gaze stability X",   unit: "",
+    range: [0, 0.04], lower_is_worse: false },
+  { key: "gaze_y_std",                label: "Gaze stability Y",   unit: "",
+    range: [0, 0.04], lower_is_worse: false },
+  { key: "tremor_chin_power_4_6hz",   label: "Jaw tremor power 4-6 Hz", unit: "",
+    range: [0, 5e-4], lower_is_worse: false },
+  { key: "tremor_chin_dominant_hz",   label: "Jaw tremor dominant freq", unit: "Hz",
+    range: [0, 4],    lower_is_worse: false },
+];
+const VOICE_METRICS = [
+  { key: "jitter_local_pct",   label: "Jitter (local)",       unit: "%",
+    range: [0, 1.04], lower_is_worse: false },
+  { key: "shimmer_local_pct",  label: "Shimmer (local)",      unit: "%",
+    range: [0, 3.81], lower_is_worse: false },
+  { key: "hnr_db",             label: "Harmonics-to-Noise",   unit: "dB",
+    range: [20, 35],  lower_is_worse: true },
+  { key: "f0_std_hz",          label: "Pitch variability F0", unit: "Hz",
+    range: [15, 35],  lower_is_worse: true },
+  { key: "speech_rate_wpm",    label: "Speech rate",          unit: "wpm",
+    range: [130, 180], lower_is_worse: true },
+  { key: "pause_ratio",        label: "Pause ratio",          unit: "",
+    range: [0, 0.25], lower_is_worse: false },
+];
+const ALL_METRICS = FACIAL_METRICS.concat(VOICE_METRICS);
+
+async function load(patientId) {
+  if (!patientId) {
+    document.getElementById("empty").style.display = "block";
+    document.getElementById("content").style.display = "none";
+    return;
+  }
+  const r = await fetch(`/api/patient/${encodeURIComponent(patientId)}`);
+  const data = await r.json();
+  if (!data.labels || data.labels.length === 0) {
+    document.getElementById("empty").innerText = "No visits for this patient yet.";
+    document.getElementById("empty").style.display = "block";
+    document.getElementById("content").style.display = "none";
+    return;
+  }
+  document.getElementById("empty").style.display = "none";
+  document.getElementById("content").style.display = "block";
+  let meta = `${data.n_visits} visits · last: ${data.latest_visit} · ${data.latest_recorded_at || ""}`;
+  if (data.synthetic) {
+    meta += ' <span class="badge-synthetic">SYNTHETIC</span>';
+  }
+  document.getElementById("meta").innerHTML = meta;
+
+  renderSummary(data);
+  renderRecordings(patientId);
+  _currentPatientData = data;
+  _currentPatientId = patientId;
+  renderActiveView();
+}
+
+let _currentPatientData = null;
+let _currentPatientId = null;
+let _currentView = "daily";
+
+async function renderActiveView() {
+  const data = _currentPatientData;
+  if (!data) return;
+  if (_currentView === "daily") {
+    document.getElementById("entry-visit-select").style.display = "none";
+    renderCharts(data, "charts-facial", FACIAL_METRICS);
+  } else {
+    // Entry mode — populate visit select if needed, then render trace chart
+    const sel = document.getElementById("entry-visit-select");
+    sel.style.display = "";
+    if (!sel.dataset.populatedFor || sel.dataset.populatedFor !== _currentPatientId) {
+      const labels = (data.labels || []).slice().reverse();
+      sel.innerHTML = labels.map(v => `<option value="${v}">${v}</option>`).join("");
+      sel.dataset.populatedFor = _currentPatientId;
+      sel.value = labels[0] || "";
+    }
+    if (!sel.value) {
+      document.getElementById("charts-facial").innerHTML =
+        '<div class="empty">No recording to display.</div>';
+      return;
+    }
+    await renderEntryCharts(_currentPatientId, sel.value);
+  }
+}
+
+async function renderEntryCharts(patientId, visitId) {
+  const grid = document.getElementById("charts-facial");
+  grid.innerHTML = '<div class="empty">Loading entry…</div>';
+  let v;
+  try {
+    v = await (await fetch(`/api/patient/${encodeURIComponent(patientId)}/visit/${encodeURIComponent(visitId)}`)).json();
+  } catch (e) {
+    grid.innerHTML = `<div class="empty">Failed to load: ${e.message}</div>`;
+    return;
+  }
+  if (!v || v.error) {
+    grid.innerHTML = `<div class="empty">${v && v.error || "No data"}</div>`;
+    return;
+  }
+  grid.innerHTML = "";
+  const m = v.metrics || {};
+  for (const meta of FACIAL_METRICS) {
+    const entry = m[meta.key];
+    const trace = (entry && entry.trace) || [];
+    const mean = entry && entry.mean;
+    const div = document.createElement("div");
+    div.className = "chart entry";
+    const meanTxt = (mean == null || isNaN(mean)) ? "—" :
+      (Math.abs(mean) < 0.01 ? Number(mean).toExponential(2) : Number(mean).toFixed(2));
+    div.innerHTML = `<h3><span>${meta.label} (${meta.unit || "score"})</span><span class="stat-mean">μ ${meanTxt}</span></h3><div id="entry-${meta.key}" style="height:270px;"></div>`;
+    grid.appendChild(div);
+    if (trace.length === 0) continue;
+    const xs = trace.map((_, i) => i);
+    const t = {
+      x: xs, y: trace,
+      mode: "lines", type: "scatter",
+      line: { color: "#22DDFF", width: 1.6 },
+    };
+    const shapes = [];
+    if (meta.range) {
+      shapes.push({
+        type: "rect", xref: "paper", yref: "y",
+        x0: 0, x1: 1, y0: meta.range[0], y1: meta.range[1],
+        fillcolor: "rgba(0, 229, 160, 0.07)", line: { width: 0 },
+      });
+    }
+    Plotly.newPlot(`entry-${meta.key}`, [t], {
+      paper_bgcolor: "#11193D", plot_bgcolor: "#11193D",
+      font: { color: "#7A8FB8", size: 10, family: "JetBrains Mono, ui-monospace, Menlo, monospace" },
+      margin: { l: 50, r: 14, t: 8, b: 30 },
+      xaxis: { title: { text: "frame", font: {size:9, color:"#5C7CB8"}},
+               gridcolor: "rgba(64,112,220,0.10)", linecolor: "rgba(64,112,220,0.20)",
+               zerolinecolor: "rgba(64,112,220,0.20)", tickfont: {size: 9} },
+      yaxis: { gridcolor: "rgba(64,112,220,0.10)", linecolor: "rgba(64,112,220,0.20)",
+               zerolinecolor: "rgba(64,112,220,0.20)", tickfont: {size: 9} },
+      shapes: shapes, showlegend: false,
+    }, { displayModeBar: false, responsive: true });
+  }
+}
+
+async function renderRecordings(patientId) {
+  const body = document.getElementById("recordings-body");
+  body.innerHTML = '<tr><td colspan="10" style="color:var(--muted);text-align:center;padding:20px;">Loading…</td></tr>';
+  let visits;
+  try {
+    visits = await (await fetch(`/api/patient/${encodeURIComponent(patientId)}/visits`)).json();
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="10" style="color:var(--red);">Failed to load: ${e.message}</td></tr>`;
+    return;
+  }
+  if (!Array.isArray(visits) || visits.length === 0) {
+    body.innerHTML = '<tr><td colspan="10" style="color:var(--muted);text-align:center;padding:20px;">No recordings yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = "";
+  // Sort newest first
+  visits = visits.slice().sort((a, b) => (b.visit_id || "").localeCompare(a.visit_id || ""));
+  for (const v of visits) {
+    const tr = document.createElement("tr");
+    tr.className = "row-hover";
+    tr.dataset.visitId = v.visit_id;
+    const state = v.state || (v.synthetic ? "synthetic" : "?");
+    const stateClass = `state-${state}`;
+    const fmt = (x, digits=2) => (x == null || isNaN(x)) ? "—" : Number(x).toFixed(digits);
+    tr.innerHTML = `
+      <td style="font-family:ui-monospace,monospace">${v.visit_id || "—"}</td>
+      <td><span class="state-pill ${stateClass}">${state}</span></td>
+      <td>${(v.recorded_at || "").replace("T", " ")}</td>
+      <td>${v.duration_s ?? "—"} s</td>
+      <td>${v.n_frames ?? "—"}</td>
+      <td>${fmt(v.blink_rate, 1)}</td>
+      <td>${fmt(v.smile_amplitude_mm, 1)}</td>
+      <td>${fmt(v.asymmetry, 3)}</td>
+      <td>${fmt(v.tremor_chin_pd_likelihood, 1)}</td>
+      <td><button class="delete-btn">Delete</button></td>
+    `;
+    tr.addEventListener("click", (e) => {
+      if (e.target.classList.contains("delete-btn")) return;
+      openDetail(patientId, v.visit_id);
+    });
+    tr.querySelector(".delete-btn").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Delete recording ${v.visit_id}?\nWill remove JSON + biomarker CSV + embed CSV.`)) return;
+      try {
+        const r = await fetch(`/api/patient/${encodeURIComponent(patientId)}/visit/${encodeURIComponent(v.visit_id)}`, {method: "DELETE"});
+        const d = await r.json();
+        if (!r.ok) { alert("Delete failed: " + (d.error || r.status)); return; }
+      } catch (err) { alert("Delete failed: " + err.message); return; }
+      // Refresh patient list (in case directory got removed) + reload
+      try {
+        const r = await fetch("/api/patients");
+        const list = await r.json();
+        const ps = document.getElementById("patient-select");
+        const stillThere = list.includes(patientId);
+        ps.innerHTML = list.map(p => `<option value="${p}" ${p===patientId?"selected":""}>${p}</option>`).join("");
+        if (stillThere) load(patientId);
+        else if (list.length) load(list[0]);
+        else load("");
+      } catch {}
+    });
+    body.appendChild(tr);
+  }
+}
+
+async function openDetail(patientId, visitId) {
+  const modal = document.getElementById("detail-modal");
+  const title = document.getElementById("detail-title");
+  const body = document.getElementById("detail-body");
+  title.innerText = `${visitId}`;
+  body.innerHTML = "Loading…";
+  modal.classList.add("show");
+  let v;
+  try {
+    v = await (await fetch(`/api/patient/${encodeURIComponent(patientId)}/visit/${encodeURIComponent(visitId)}`)).json();
+  } catch (e) { body.innerText = "Failed to load: " + e.message; return; }
+  const m = v.metrics || {};
+  const voice = v.voice || {};
+  const meanOf = (k) => {
+    const e = m[k]; if (!e) return "—";
+    return (e.mean ?? "—") + (typeof e.mean === "number" ? "" : "");
+  };
+  const fmt = (x, d=3) => (x == null || x === "—" || isNaN(x)) ? "—" : Number(x).toFixed(d);
+  body.innerHTML = `
+    <h3>Metadata</h3>
+    <dl>
+      <dt>Patient</dt><dd>${v.patient_id || "—"}</dd>
+      <dt>State</dt><dd>${v.state || "—"}</dd>
+      <dt>Recorded at</dt><dd>${v.recorded_at || "—"}</dd>
+      <dt>Duration / frames</dt><dd>${v.duration_s ?? "—"} s · ${v.n_frames ?? "—"} frames</dd>
+      <dt>Sex / age / label</dt><dd>${v.sex ?? "—"} · ${v.age ?? "—"} · ${v.label ?? "—"}</dd>
+      <dt>Synthetic</dt><dd>${v.synthetic ? "yes" : "no"}</dd>
+    </dl>
+    <h3>Biomarkers (mean)</h3>
+    <dl>
+      <dt>Blink rate</dt><dd>${fmt(meanOf("blink_rate"), 2)} /min</dd>
+      <dt>Smile amplitude</dt><dd>${fmt(meanOf("smile_amplitude_mm"), 1)} mm</dd>
+      <dt>Brow amplitude</dt><dd>${fmt(meanOf("brow_amplitude_mm"), 1)} mm</dd>
+      <dt>Asymmetry</dt><dd>${fmt(meanOf("asymmetry"), 3)}</dd>
+      <dt>Face distance</dt><dd>${fmt(meanOf("face_distance_mm"), 0)} mm</dd>
+      <dt>Head yaw</dt><dd>${fmt(meanOf("head_yaw_deg"), 1)}°</dd>
+      <dt>Off-axis fraction</dt><dd>${fmt(meanOf("off_axis"), 3)}</dd>
+    </dl>
+    <h3>Tremor (chin)</h3>
+    <dl>
+      <dt>PD likelihood</dt><dd>${fmt(meanOf("tremor_chin_pd_likelihood"), 1)} %</dd>
+      <dt>Lock-in ratio</dt><dd>${fmt(meanOf("tremor_chin_lock_in"), 3)}</dd>
+      <dt>Motion power (mU)</dt><dd>${fmt(meanOf("tremor_chin_motion_power") * 10000, 1)}</dd>
+      <dt>Power 4-6 Hz (mU)</dt><dd>${fmt(meanOf("tremor_chin_power_4_6hz") * 10000, 2)}</dd>
+      <dt>Dominant freq</dt><dd>${fmt(meanOf("tremor_chin_dominant_hz"), 2)} Hz</dd>
+    </dl>
+    ${voice.wav_seconds != null ? `<h3>Voice</h3>
+    <dl>
+      <dt>Audio</dt><dd>${voice.wav_seconds} s</dd>
+      <dt>Jitter (local)</dt><dd>${fmt(voice.jitter_local_pct, 3)} %</dd>
+      <dt>Shimmer (local)</dt><dd>${fmt(voice.shimmer_local_pct, 3)} %</dd>
+      <dt>HNR</dt><dd>${fmt(voice.hnr_db, 2)} dB</dd>
+      <dt>F0 mean / std</dt><dd>${fmt(voice.f0_mean_hz, 1)} / ${fmt(voice.f0_std_hz, 1)} Hz</dd>
+      <dt>Speech rate</dt><dd>${voice.speech_rate_wpm ?? "—"} wpm</dd>
+      <dt>Pause ratio</dt><dd>${fmt(voice.pause_ratio, 3)}</dd>
+      <dt>Transcript</dt><dd>${voice.transcript_excerpt || "—"}</dd>
+    </dl>` : ""}
+  `;
+}
+document.getElementById("detail-close").addEventListener("click", () => {
+  document.getElementById("detail-modal").classList.remove("show");
+});
+
+// ─── Cancel running recording / baseline ─────────────────────────────────
+async function _cancelRecording() {
+  if (!confirm("Stop the recording and discard partial CSV/JSON?")) return false;
+  try {
+    const r = await fetch("/api/record/cancel", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({delete: true}),
+    });
+    const d = await r.json();
+    if (!r.ok) { alert("Cancel failed: " + (d.error || r.status)); return false; }
+    return true;
+  } catch (e) {
+    alert("Cancel failed: " + e.message);
+    return false;
+  }
+}
+
+document.getElementById("record-cancel").addEventListener("click", async () => {
+  const ok = await _cancelRecording();
+  if (!ok) return;
+  const banner = document.getElementById("record-banner");
+  banner.classList.remove("success");
+  banner.classList.add("error");
+  document.getElementById("record-status").innerText = "Cancelled — partial files discarded · debug pipeline restarted";
+  document.getElementById("record-bar").style.width = "100%";
+});
+
+document.getElementById("reboot").addEventListener("click", async () => {
+  if (!confirm("Soft-reboot the OAK device? Visualizer will be unavailable for ~30 s while it comes back up.\n\nUse this when recordings fail with 'X_LINK_DEVICE_NOT_FOUND'.")) return;
+  const banner = document.getElementById("record-banner");
+  banner.className = "";
+  banner.style.display = "block";
+  document.getElementById("record-status").innerText = "Rebooting OAK device…";
+  document.getElementById("record-bar").style.width = "0%";
+  let resp;
+  try {
+    resp = await fetch("/api/device/reboot", {method: "POST",
+      headers: {"Content-Type":"application/json"}, body: "{}"});
+  } catch(e) {
+    banner.classList.add("error");
+    document.getElementById("record-status").innerText = "Reboot failed: " + e.message;
+    return;
+  }
+  if (!resp.ok) {
+    const d = await resp.json().catch(() => ({}));
+    banner.classList.add("error");
+    document.getElementById("record-status").innerText = "Reboot failed: " + (d.error || resp.status);
+    return;
+  }
+  // Poll for the visualizer port to come back
+  const startMs = Date.now();
+  const interval = setInterval(async () => {
+    const elapsed = (Date.now() - startMs) / 1000;
+    document.getElementById("record-status").innerText = `Rebooting OAK… ${Math.floor(elapsed)}s (debug pipeline restarting after device is online)`;
+    document.getElementById("record-bar").style.width = Math.min(95, elapsed * 2) + "%";
+    if (elapsed > 90) {
+      clearInterval(interval);
+      banner.classList.add("error");
+      document.getElementById("record-status").innerText = "Reboot is taking too long — check terminal";
+      return;
+    }
+    try {
+      const r = await fetch("/api/recording_status");  // any 200 means Flask alive; visualizer comes back independently
+      if (r.ok && elapsed > 15) {
+        // Try to ping 8082 indirectly: if patients endpoint still works after 15s, pipeline likely restarting
+        clearInterval(interval);
+        banner.classList.add("success");
+        document.getElementById("record-bar").style.width = "100%";
+        document.getElementById("record-status").innerText = "OAK rebooted · debug pipeline restarting · reload visualizer at :8082";
+      }
+    } catch {}
+  }, 2000);
+});
+
+document.getElementById("bl-cancel-running").addEventListener("click", async () => {
+  const ok = await _cancelRecording();
+  if (!ok) return;
+  const timer = document.getElementById("bl-timer");
+  timer.innerText = "Cancelled — partial files discarded";
+  timer.style.color = "var(--red)";
+  document.getElementById("bl-close").disabled = false;
+});
+
+function renderSummary(data) {
+  const sum = document.getElementById("summary");
+  sum.innerHTML = "";
+  // 4 KPI cards: facial only (voice analysis disabled)
+  const summaryKeys = [
+    "blink_rate", "smile_amplitude_mm", "asymmetry", "tremor_chin_power_4_6hz",
+  ];
+  for (const key of summaryKeys) {
+    const meta = ALL_METRICS.find(m => m.key === key);
+    if (!meta) continue;
+    const series = data.series[key] || [];
+    const latest = series[series.length - 1];
+    const delta = data.deltas_pct_vs_baseline[key];
+    let cls = "flat", arrow = "→", txt = "";
+    if (delta != null) {
+      if (Math.abs(delta) < 5) { cls = "flat"; arrow = "→"; }
+      else if (delta > 0)       { cls = meta.lower_is_worse ? "down" : "up"; arrow = "↑"; }
+      else                      { cls = meta.lower_is_worse ? "up"   : "down"; arrow = "↓"; }
+      txt = `${arrow} ${Math.abs(delta).toFixed(1)}% vs baseline`;
+    } else {
+      txt = "no baseline";
+    }
+    const card = document.createElement("div");
+    card.className = "card";
+    const fmt = (latest == null) ? "–" :
+      (Math.abs(latest) < 0.01 ? latest.toExponential(2) : latest.toFixed(2));
+    card.innerHTML = `
+      <div class="label">${meta.label}</div>
+      <div class="value">${fmt} <span style="font-size:14px;color:var(--muted)">${meta.unit}</span></div>
+      <div class="delta ${cls}">${txt}</div>
+    `;
+    sum.appendChild(card);
+  }
+}
+
+function renderCharts(data, gridId, metrics) {
+  const grid = document.getElementById(gridId);
+  grid.innerHTML = "";
+  for (const meta of metrics) {
+    const div = document.createElement("div");
+    div.className = "chart";
+    div.innerHTML = `<h3>${meta.label} (${meta.unit || "score"})</h3><div id="chart-${meta.key}" style="height:270px;"></div>`;
+    grid.appendChild(div);
+
+    const trace = {
+      x: data.labels, y: data.series[meta.key],
+      mode: "lines+markers", type: "scatter",
+      line: { color: "#22DDFF", width: 3 },
+      marker: { size: 8, color: "#22DDFF",
+               line: { width: 1, color: "#0073FF" } },
+    };
+    const shapes = [];
+    if (meta.range) {
+      shapes.push({
+        type: "rect", xref: "paper", yref: "y",
+        x0: 0, x1: 1, y0: meta.range[0], y1: meta.range[1],
+        fillcolor: "rgba(0, 229, 160, 0.10)", line: { width: 0 },
+      });
+    }
+    Plotly.newPlot(`chart-${meta.key}`, [trace], {
+      paper_bgcolor: "#11193D", plot_bgcolor: "#11193D",
+      font: { color: "#7A8FB8", size: 10, family: "JetBrains Mono, ui-monospace, Menlo, monospace" },
+      margin: { l: 50, r: 14, t: 8, b: 30 },
+      xaxis: { gridcolor: "rgba(64,112,220,0.15)", linecolor: "rgba(64,112,220,0.25)",
+               zerolinecolor: "rgba(64,112,220,0.25)", tickfont: {size: 10} },
+      yaxis: { gridcolor: "rgba(64,112,220,0.15)", linecolor: "rgba(64,112,220,0.25)",
+               zerolinecolor: "rgba(64,112,220,0.25)", tickfont: {size: 10} },
+      shapes: shapes, showlegend: false,
+    }, { displayModeBar: false, responsive: true });
+  }
+}
+
+document.getElementById("patient-select").addEventListener("change", e => {
+  // Reset entry-mode visit select cache so it repopulates for the new patient
+  document.getElementById("entry-visit-select").dataset.populatedFor = "";
+  load(e.target.value);
+});
+document.getElementById("refresh").addEventListener("click", () => load(document.getElementById("patient-select").value));
+
+// Daily / Entry toggle
+document.querySelectorAll("#view-toggle .view-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("#view-toggle .view-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    _currentView = btn.dataset.view;
+    renderActiveView();
+  });
+});
+document.getElementById("entry-visit-select").addEventListener("change", () => {
+  if (_currentView === "entry") renderActiveView();
+});
+document.getElementById("pdf").addEventListener("click", () => {
+  const p = document.getElementById("patient-select").value;
+  if (p) window.location.href = `/api/patient/${encodeURIComponent(p)}/report.pdf`;
+});
+document.getElementById("csv").addEventListener("click", () => {
+  const p = document.getElementById("patient-select").value;
+  if (p) window.location.href = `/api/patient/${encodeURIComponent(p)}/log.csv`;
+});
+
+// ─── Baseline wizard ─────────────────────────────────────────────────────
+const blModal = document.getElementById("baseline-modal");
+const blForm = document.getElementById("baseline-form");
+const blProgress = document.getElementById("baseline-progress");
+document.getElementById("baseline").addEventListener("click", () => {
+  blForm.style.display = "block";
+  blProgress.style.display = "none";
+  document.getElementById("bl-patient").value = document.getElementById("patient-select").value || "";
+  blModal.classList.add("show");
+});
+document.getElementById("bl-cancel").addEventListener("click", () => {
+  blModal.classList.remove("show");
+});
+document.getElementById("bl-close").addEventListener("click", () => {
+  blModal.classList.remove("show");
+});
+document.getElementById("bl-start").addEventListener("click", async () => {
+  const patient = document.getElementById("bl-patient").value.trim();
+  if (!patient) { alert("Patient ID required"); return; }
+  const sexRaw = document.getElementById("bl-sex").value;
+  const ageRaw = document.getElementById("bl-age").value;
+  const labelRaw = document.getElementById("bl-label").value;
+  const duration = parseInt(document.getElementById("bl-duration").value || "10", 10);
+  const body = {
+    patient_id: patient, duration: duration,
+    sex: sexRaw === "" ? null : parseInt(sexRaw, 10),
+    age: ageRaw === "" ? null : parseInt(ageRaw, 10),
+    label: labelRaw === "" ? null : parseInt(labelRaw, 10),
+  };
+
+  let resp;
+  try {
+    resp = await fetch("/api/baseline", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+  } catch (e) { alert("Network error: " + e.message); return; }
+  const data = await resp.json();
+  if (!resp.ok) { alert("Error: " + (data.error || resp.status)); return; }
+
+  blForm.style.display = "none";
+  blProgress.style.display = "block";
+  // Reset stage UI
+  ["rest", "talk", "smile"].forEach(s => {
+    document.getElementById("bl-stage-" + s).classList.remove("done", "active");
+  });
+  const closeBtn = document.getElementById("bl-close");
+  closeBtn.disabled = true;
+  const timer = document.getElementById("bl-timer");
+
+  let stageStartMs = null;
+  let lastStep = null;
+  const interval = setInterval(async () => {
+    let s;
+    try { s = await (await fetch("/api/baseline_status")).json(); }
+    catch { return; }
+
+    if (s.current_step !== lastStep) {
+      // Stage changed → reset timer base
+      stageStartMs = Date.now();
+      ["rest", "talk", "smile"].forEach(st => {
+        const el = document.getElementById("bl-stage-" + st);
+        el.classList.remove("active");
+        if (s.completed.includes(st)) el.classList.add("done");
+      });
+      if (s.current_step) {
+        document.getElementById("bl-stage-" + s.current_step).classList.add("active");
+      }
+      lastStep = s.current_step;
+    }
+    if (s.current_step) {
+      const elapsedRaw = Math.floor((Date.now() - stageStartMs) / 1000);
+      if (elapsedRaw >= duration) {
+        timer.innerText = `${s.current_step.toUpperCase()} — finalizing…`;
+      } else {
+        timer.innerText = `${s.current_step.toUpperCase()} — ${elapsedRaw}/${duration} s`;
+      }
+    }
+
+    if (!s.active) {
+      clearInterval(interval);
+      ["rest", "talk", "smile"].forEach(st => {
+        const el = document.getElementById("bl-stage-" + st);
+        el.classList.remove("active");
+        if (s.completed.includes(st)) el.classList.add("done");
+      });
+      if (s.last_error) {
+        timer.innerText = "Error: " + s.last_error;
+        timer.style.color = "var(--red)";
+      } else {
+        timer.innerText = `Done — 3/3 stages saved for ${s.patient_id}`;
+        timer.style.color = "var(--green)";
+      }
+      closeBtn.disabled = false;
+      // Refresh patient list
+      try {
+        const r = await fetch("/api/patients");
+        const list = await r.json();
+        const ps = document.getElementById("patient-select");
+        ps.innerHTML = list.map(p => `<option value="${p}" ${p===patient?"selected":""}>${p}</option>`).join("");
+        load(patient);
+      } catch {}
+    }
+  }, 1000);
+});
+
+// ─── Record visit modal ─────────────────────────────────────────────────
+const recModal = document.getElementById("rec-modal");
+const recPatient = document.getElementById("rec-patient");
+const recNumHint = document.getElementById("rec-num-hint");
+const recLabel = document.getElementById("rec-label");
+
+let _patientIndex = null;
+async function _loadPatientIndex() {
+  try {
+    _patientIndex = await (await fetch("/api/patient_index")).json();
+  } catch { _patientIndex = {next_id: 1, by_name: {}, labels: {}}; }
+}
+function _hintForPatient(name) {
+  if (!_patientIndex) return;
+  const trimmed = (name || "").trim();
+  if (!trimmed) {
+    recNumHint.innerText = "";
+    return;
+  }
+  const known = _patientIndex.by_name[trimmed];
+  let hint;
+  if (known != null) {
+    const presetLabel = _patientIndex.labels[String(known)];
+    hint = `Existing patient → num ${known}`;
+    if (presetLabel != null) {
+      hint += ` · preset label ${presetLabel} (${presetLabel === 1 ? "Parkinson" : "no PD"})`;
+      // Auto-fill label
+      recLabel.value = String(presetLabel);
+    }
+  } else {
+    const nextNum = _patientIndex.next_id;
+    const presetLabel = _patientIndex.labels[String(nextNum)];
+    hint = `New patient → will be assigned num ${nextNum}`;
+    if (presetLabel != null) {
+      hint += ` · preset label ${presetLabel} (${presetLabel === 1 ? "Parkinson" : "no PD"})`;
+      recLabel.value = String(presetLabel);
+    }
+  }
+  recNumHint.innerText = hint;
+}
+recPatient.addEventListener("input", () => _hintForPatient(recPatient.value));
+document.getElementById("rec-cancel").addEventListener("click", () => recModal.classList.remove("show"));
+
+document.getElementById("record").addEventListener("click", async () => {
+  await _loadPatientIndex();
+  const sel = document.getElementById("patient-select").value;
+  recPatient.value = sel || "";
+  document.getElementById("rec-sex").value = "";
+  document.getElementById("rec-age").value = "";
+  recLabel.value = "";
+  document.getElementById("rec-duration").value = "60";
+  document.getElementById("rec-voice").checked = false;
+  _hintForPatient(recPatient.value);
+  recModal.classList.add("show");
+});
+
+document.getElementById("rec-start").addEventListener("click", async () => {
+  const patient = recPatient.value.trim();
+  if (!patient) { alert("Patient name required"); return; }
+  const sexRaw = document.getElementById("rec-sex").value;
+  const ageRaw = document.getElementById("rec-age").value;
+  const labelRaw = recLabel.value;
+  const duration = parseInt(document.getElementById("rec-duration").value || "60", 10);
+  const voice = document.getElementById("rec-voice").checked;
+  if (!Number.isFinite(duration) || duration < 5) {
+    alert("Duration must be ≥5 s"); return;
+  }
+  recModal.classList.remove("show");
+
+  const banner = document.getElementById("record-banner");
+  const statusEl = document.getElementById("record-status");
+  const bar = document.getElementById("record-bar");
+  banner.className = "";
+  banner.style.display = "block";
+  statusEl.innerText = "Killing debug pipeline + starting visit…";
+  bar.style.width = "0%";
+
+  const body = {
+    patient_id: patient, duration: duration, voice: voice,
+    sex: sexRaw === "" ? null : parseInt(sexRaw, 10),
+    age: ageRaw === "" ? null : parseInt(ageRaw, 10),
+    label: labelRaw === "" ? null : parseInt(labelRaw, 10),
+  };
+
+  let resp;
+  try {
+    resp = await fetch("/api/record", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    banner.classList.add("error");
+    statusEl.innerText = "Network error: " + e.message;
+    return;
+  }
+  const data = await resp.json();
+  if (!resp.ok) {
+    banner.classList.add("error");
+    statusEl.innerText = "Error: " + (data.error || resp.status);
+    return;
+  }
+
+  const startMs = Date.now();
+  const totalMs = duration * 1000;
+  const interval = setInterval(async () => {
+    const elapsedMs = Date.now() - startMs;
+    bar.style.width = Math.min(100, (elapsedMs / totalMs) * 100) + "%";
+    let s;
+    try {
+      s = await (await fetch("/api/recording_status")).json();
+    } catch { return; }
+    if (!s.active) {
+      clearInterval(interval);
+      bar.style.width = "100%";
+      if (s.last_error) {
+        banner.classList.add("error");
+        statusEl.innerText = "Recording finished with error: " + s.last_error;
+      } else {
+        banner.classList.add("success");
+        statusEl.innerHTML = `Recorded <b>${data.state.patient_id}</b> / <b>${data.state.visit_id}</b>. ` +
+                            `CSV: <code>${data.state.csv_path}</code> · JSON: <code>${data.state.json_path}</code>. ` +
+                            `Debug pipeline restarted.`;
+      }
+      // Auto-refresh patient list & charts
+      try {
+        const r = await fetch("/api/patients");
+        const list = await r.json();
+        const ps = document.getElementById("patient-select");
+        const cur = ps.value;
+        ps.innerHTML = list.map(p => `<option value="${p}" ${p===patient?"selected":""}>${p}</option>`).join("");
+        load(patient);
+      } catch {}
+      return;
+    }
+    const elapsedS = Math.floor(elapsedMs / 1000);
+    if (elapsedS >= duration) {
+      statusEl.innerText = `Recording ${s.patient_id} / ${s.visit_id} — finalizing… (saving JSON, restarting debug pipeline)`;
+    } else {
+      statusEl.innerText = `Recording ${s.patient_id} / ${s.visit_id} — ${elapsedS}/${duration}s · CSV streaming to ${s.csv_path}`;
+    }
+  }, 1000);
+});
+
+load("{{ current or '' }}");
+</script>
+</body>
+</html>

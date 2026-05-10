@@ -1,0 +1,112 @@
+{
+  "patient_id": "lisanew",
+  "visit_id": "2026-05-10_035241",
+  "window_start_ms": 1778377969427.0,
+  "window_end_ms": 1778378029437.0,
+  "ground_truth": {
+    "label": 1,
+    "sex": 1,
+    "age": 65
+  },
+  "prediction": {
+    "label": "Healthy",
+    "confidence_pct": 63.28,
+    "pd_probability": 0.3672,
+    "threshold": 0.5
+  },
+  "feature_importance": {
+    "top_tremor_regions": [
+      {
+        "region": "jaw",
+        "tremor_band_ratio": 0.2104,
+        "dominant_freq_hz": 6.15,
+        "band_power": 12.346975,
+        "interpretation": "Moderate tremor signal in jaw"
+      },
+      {
+        "region": "lips",
+        "tremor_band_ratio": 0.205,
+        "dominant_freq_hz": 3.49,
+        "band_power": 9.02946,
+        "interpretation": "Moderate tremor signal in lips"
+      },
+      {
+        "region": "nose",
+        "tremor_band_ratio": 0.2005,
+        "dominant_freq_hz": 3.28,
+        "band_power": 8.473168,
+        "interpretation": "Moderate tremor signal in nose"
+      }
+    ],
+    "top_velocity_regions": [
+      {
+        "region": "jaw",
+        "mean_velocity": 0.134176,
+        "std_velocity": 0.168484,
+        "max_velocity": 1.973493
+      },
+      {
+        "region": "lips",
+        "mean_velocity": 0.087417,
+        "std_velocity": 0.084297,
+        "max_velocity": 0.755479
+      },
+      {
+        "region": "nose",
+        "mean_velocity": 0.075124,
+        "std_velocity": 0.078171,
+        "max_velocity": 0.323926
+      }
+    ],
+    "decision_note": "Low PD probability. Facial movement patterns appear within healthy norms. Tremor-band ratios are low across all regions."
+  },
+  "preprocessing": {
+    "frames_in_file": 1046,
+    "frames_used": 120,
+    "landmarks_in_file": 108,
+    "estimated_fps": 24.4,
+    "anchor_landmark": 168,
+    "filter_applied": true,
+    "num_frame_features": 762,
+    "num_fft_features": 9,
+    "scaler_applied": false
+  },
+  "raw_features": {
+    "fft_per_region": {
+      "lips": {
+        "dominant_freq_hz": 3.485714,
+        "band_power": 9.02946,
+        "band_ratio": 0.204967
+      },
+      "nose": {
+        "dominant_freq_hz": 3.280672,
+        "band_power": 8.473168,
+        "band_ratio": 0.200508
+      },
+      "jaw": {
+        "dominant_freq_hz": 6.151261,
+        "band_power": 12.346975,
+        "band_ratio": 0.210363
+      }
+    },
+    "velocity_per_region": {
+      "lips": {
+        "mean_velocity": 0.087417,
+        "std_velocity": 0.084297,
+        "max_velocity": 0.755479
+      },
+      "nose": {
+        "mean_velocity": 0.075124,
+        "std_velocity": 0.078171,
+        "max_velocity": 0.323926
+      },
+      "jaw": {
+        "mean_velocity": 0.134176,
+        "std_velocity": 0.168484,
+        "max_velocity": 1.973493
+      }
+    }
+  },
+  "inference_time_ms": 263.52,
+  "model_path": "pd_tcn_model_acc_80.19.onnx"
+}
