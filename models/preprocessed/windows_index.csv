@@ -1,0 +1,10 @@
+patient_id,visit_id,segment,window,label,age,sex
+demo_patient1,2026-05-10_013137,4,0,-1,,-1
+demo_patient1,2026-05-10_013137,4,1,-1,,-1
+demo_patient1,2026-05-10_013137,4,2,-1,,-1
+demo_patient1,2026-05-10_013137,6,0,-1,,-1
+demo_patient1,2026-05-10_013137,6,1,-1,,-1
+demo_patient1,2026-05-10_013137,6,2,-1,,-1
+demo_patient1,2026-05-10_013137,6,3,-1,,-1
+demo_patient1,2026-05-10_013137,6,4,-1,,-1
+demo_patient1,2026-05-10_013137,6,5,-1,,-1
