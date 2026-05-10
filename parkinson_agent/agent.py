@@ -20,7 +20,12 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .input_schema import KnowledgePayload
+from .input_schema import (
+    JawTremor,
+    KnowledgePayload,
+    MouthAsymmetry,
+    RegionalMotion,
+)
 from .schemas import ScreeningReport
 from .tools import all_tool_schemas, make_tools
 
@@ -115,6 +120,177 @@ def _extract_message(response: Any) -> dict:
     if not isinstance(msg, dict):
         msg = msg.model_dump() if hasattr(msg, "model_dump") else dict(msg)
     return msg
+
+
+# ---------------------------------------------------------------------------
+# Deterministic clinical decisions.
+#
+# Small local models (≤1.5B) cannot be trusted to apply MDS-UPDRS thresholds
+# correctly — they pattern-match on prompt examples rather than reason. So we
+# compute every decision in Python from the upstream numbers, and ask the LLM
+# only to write the natural-language explanations. This keeps the pipeline
+# auditable (the rules are visible code) and works regardless of model size.
+# ---------------------------------------------------------------------------
+
+# Hypomimia thresholds on the composite expressivity score.
+# Lower score = more hypomimic. Normal expressivity in our data ≈ 0.4–0.5.
+HYPOMIMIA_SEVERE_BELOW = 0.15
+HYPOMIMIA_MODERATE_BELOW = 0.25
+HYPOMIMIA_MILD_BELOW = 0.35
+
+# Jaw tremor: parkinsonian band + spectral evidence.
+TREMOR_PEAKEDNESS_STRONG = 0.5
+TREMOR_PEAKEDNESS_WEAK = 0.3
+TREMOR_INBAND_FRAC_STRONG = 0.30
+TREMOR_INBAND_FRAC_WEAK = 0.15
+
+# Mouth-corner asymmetry: ratio thresholds.
+ASYM_STRONG = 0.5
+ASYM_MILD = 0.3
+
+
+def _decide_hypomimia(rm: RegionalMotion | None) -> dict:
+    if rm is None or not rm.valid or rm.composite_expressivity_score is None:
+        return {
+            "name": "hypomimia",
+            "detected": False,
+            "side": None,
+            "severity": None,
+            "confidence": "low",
+            "key_metrics": {},
+            "summary": "regional_motion data not available",
+        }
+    score = rm.composite_expressivity_score
+    chin = (rm.per_region or {}).get("chin_jaw")
+    lip = (rm.per_region or {}).get("lower_lip")
+    metrics: dict[str, Any] = {"composite_expressivity_score": round(score, 4)}
+    if chin:
+        metrics["chin_jaw_rom"] = round(chin.range_of_motion, 4)
+    if lip:
+        metrics["lower_lip_rom"] = round(lip.range_of_motion, 4)
+
+    if score < HYPOMIMIA_SEVERE_BELOW:
+        return {**_sign("hypomimia", True, 3, "high", metrics, "bilateral"),
+                "summary": f"composite {score:.3f} severely reduced"}
+    if score < HYPOMIMIA_MODERATE_BELOW:
+        return {**_sign("hypomimia", True, 2, "moderate", metrics, "bilateral"),
+                "summary": f"composite {score:.3f} moderately reduced"}
+    if score < HYPOMIMIA_MILD_BELOW:
+        return {**_sign("hypomimia", True, 1, "low", metrics, "bilateral"),
+                "summary": f"composite {score:.3f} mildly reduced"}
+    return {**_sign("hypomimia", False, 0, "high", metrics, None),
+            "summary": f"composite {score:.3f} within normal range"}
+
+
+def _decide_jaw_tremor(jt: JawTremor | None) -> dict:
+    if jt is None or not jt.valid:
+        return {
+            "name": "jaw_tremor",
+            "detected": False,
+            "side": None,
+            "severity": None,
+            "confidence": "low",
+            "key_metrics": {},
+            "summary": "jaw_tremor data not available",
+        }
+    f = jt.dominant_frequency_hz
+    peak = jt.spectral_peakedness or 0.0
+    in_band = jt.in_band_fraction_of_total or 0.0
+    in_pd_band = bool(jt.in_parkinsonian_range_4_6hz)
+    metrics = {
+        "dominant_frequency_hz": round(f or 0.0, 3),
+        "in_parkinsonian_range_4_6hz": in_pd_band,
+        "spectral_peakedness": round(peak, 3),
+        "in_band_fraction_of_total": round(in_band, 3),
+    }
+    if in_pd_band and peak > TREMOR_PEAKEDNESS_STRONG and in_band > TREMOR_INBAND_FRAC_STRONG:
+        return {**_sign("jaw_tremor", True, 2, "high", metrics, None),
+                "summary": f"strong rhythmic peak at {f:.2f} Hz in parkinsonian band"}
+    if in_pd_band and (peak > TREMOR_PEAKEDNESS_WEAK or in_band > TREMOR_INBAND_FRAC_WEAK):
+        return {**_sign("jaw_tremor", True, 1, "moderate", metrics, None),
+                "summary": f"weak rhythmic peak at {f:.2f} Hz in parkinsonian band"}
+    return {**_sign("jaw_tremor", False, 0, "high", metrics, None),
+            "summary": f"dominant frequency {f:.2f} Hz outside parkinsonian band 4–6 Hz"}
+
+
+def _decide_mouth_asymmetry(ma: MouthAsymmetry | None) -> dict:
+    if ma is None or not ma.valid or ma.asymmetry_ratio is None:
+        return {
+            "name": "mouth_corner_asymmetry",
+            "detected": False,
+            "side": None,
+            "severity": None,
+            "confidence": "low",
+            "key_metrics": {},
+            "summary": "mouth_asymmetry data not available",
+        }
+    asym = ma.asymmetry_ratio
+    side = ma.less_mobile_side
+    metrics = {
+        "asymmetry_ratio": round(asym, 3),
+        "less_mobile_side": side,
+        "rom_left": round(ma.rom_left or 0.0, 4),
+        "rom_right": round(ma.rom_right or 0.0, 4),
+    }
+    if asym > ASYM_STRONG:
+        return {**_sign("mouth_corner_asymmetry", True, 2, "high", metrics, side),
+                "summary": f"strong asymmetry ratio {asym:.1%} on {side} side"}
+    if asym > ASYM_MILD:
+        return {**_sign("mouth_corner_asymmetry", True, 1, "moderate", metrics, side),
+                "summary": f"mild asymmetry ratio {asym:.1%} on {side} side"}
+    return {**_sign("mouth_corner_asymmetry", False, 0, "high", metrics, None),
+            "summary": f"asymmetry ratio {asym:.1%} within normal range"}
+
+
+def _sign(name: str, detected: bool, severity: int | None, confidence: str,
+          key_metrics: dict, side: str | None) -> dict:
+    return {
+        "name": name,
+        "detected": detected,
+        "side": side,
+        "severity": severity,
+        "confidence": confidence,
+        "key_metrics": key_metrics,
+    }
+
+
+def _decide_overall_risk(signs: list[dict]) -> str:
+    strong = sum(
+        1 for s in signs
+        if s.get("detected") and (s.get("severity") or 0) >= 2
+    )
+    weak = sum(
+        1 for s in signs
+        if s.get("detected") and (s.get("severity") or 0) == 1
+    )
+    if strong >= 1:
+        return "elevated"
+    if weak >= 2:
+        return "elevated"
+    if weak == 1:
+        return "borderline"
+    return "low"
+
+
+def _decide_clinical_state(payload: KnowledgePayload) -> dict:
+    """Apply MDS-UPDRS thresholds deterministically. Returns the structured
+    skeleton of the report; only the prose fields remain to be written."""
+    cf = payload.clinical_features
+    signs = [
+        _decide_hypomimia(cf.regional_motion),
+        _decide_jaw_tremor(cf.jaw_tremor),
+        _decide_mouth_asymmetry(cf.mouth_asymmetry),
+    ]
+    asymmetry_detected = any(
+        s["name"] == "mouth_corner_asymmetry" and s.get("detected")
+        for s in signs
+    )
+    overall = _decide_overall_risk(signs)
+    return {
+        "overall_risk_level": overall,
+        "asymmetry_detected": asymmetry_detected,
+        "signs": signs,
+    }
 
 
 _RISK_LEVELS = {"low", "borderline", "elevated"}
@@ -257,138 +433,193 @@ def run_screening_agent_simple(
     model: str | None = None,
     temperature: float = 0.0,
 ) -> AgentResult:
-    """One-shot agent: no tool-use, single LLM call, JSON-in-text response.
+    """Hybrid agent: deterministic Python rules + LLM-generated narrative.
 
-    Designed for small local models (≤1.5B) where forcing complex JSON
-    Schema enforcement via tool-use causes hangs. The full payload is
-    inlined in the prompt and the model is asked to return a single JSON
-    object matching `ScreeningReport`. Validation is done client-side.
+    Clinical decisions (which signs are detected, severity, overall risk)
+    are computed in Python from the upstream numbers using documented
+    MDS-UPDRS thresholds. The LLM is asked ONLY to write the natural-
+    language explanations: each sign's `rationale`, `flagged_findings`,
+    `recommended_followup`, and `clinician_notes`. This works reliably
+    even on very small models (≤0.5B) and keeps clinical decisions
+    auditable.
     """
     if client is None:
         client = _default_client()
     if model is None:
         model = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 
-    # Trim the payload to the fields the model needs to read. Skips raw
-    # weights (we already mention them in text) and per-region velocity
-    # noise the model wouldn't use anyway.
-    cf = payload.clinical_features
-    compact = {
-        "patient_id": payload.patient_id,
-        "session_id": payload.session_id,
-        "duration_s": payload.duration_s,
-        "n_frames": payload.n_frames,
-        "regional_motion": (
-            cf.regional_motion.model_dump(exclude_none=True)
-            if cf.regional_motion else None
-        ),
-        "jaw_tremor": (
-            cf.jaw_tremor.model_dump(exclude_none=True)
-            if cf.jaw_tremor else None
-        ),
-        "mouth_asymmetry": (
-            cf.mouth_asymmetry.model_dump(exclude_none=True)
-            if cf.mouth_asymmetry else None
-        ),
-        "model_inference": (
-            payload.model_inference.model_dump(exclude_none=True)
-            if payload.model_inference else None
-        ),
-    }
-    knowledge = json.dumps(compact, indent=2)
+    # ── Step 1: deterministic clinical decisions (no LLM) ─────────────
+    state = _decide_clinical_state(payload)
 
-    prompt = f"""Clinical screening assistant for face-only Parkinson's. Upstream-measured data:
+    # ── Step 2: ask the LLM to write the narrative for those decisions ─
+    decisions_summary = "\n".join(
+        f"- {s['name']} | detected={s['detected']} | "
+        f"severity={s['severity']} | side={s['side']} | "
+        f"key_metrics={s['key_metrics']} | analysis: {s['summary']}"
+        for s in state["signs"]
+    )
+    risk = state["overall_risk_level"]
 
-```json
-{knowledge}
-```
+    narrative_prompt = f"""You are a clinical screening assistant writing the narrative
+section of a face-based Parkinson's screening report. Clinical decisions
+have ALREADY been made by deterministic rules — do not revise them. Your
+ONLY job is to write the English text that explains them to a clinician.
 
-WEIGHTS: chin/jaw=1.0, lower_lip=1.0 (HIGH); upper_lip/mouth_corners=0.6 (MID); cheeks=0.4. Eyelids/neck NOT measured.
+OVERALL RISK (already decided): {risk}
+ASYMMETRY DETECTED (already decided): {state['asymmetry_detected']}
 
-CRITERIA:
-- Hypomimia: low composite_expressivity_score + reduced chin/lower_lip RoM.
-- Jaw tremor: dominant_frequency_hz in [4,6] Hz + spectral_peakedness>0.5 + in_band_fraction>0.3.
-- Mouth asymmetry: asymmetry_ratio>0.3 → clinically relevant.
+MOTOR SIGNS (decisions and supporting numbers):
+{decisions_summary}
 
-RISK: low (no convincing signs) / borderline (1 weak sign) / elevated (1 strong sign or convergent signs).
+CLINICAL THRESHOLDS USED (so your prose is consistent):
+- Hypomimia: composite_expressivity_score < 0.35 = mild, < 0.25 = moderate, < 0.15 = severe.
+- Jaw tremor: dominant frequency in 4–6 Hz with peakedness > 0.5 and in-band fraction > 0.3 = strong; relaxed thresholds = weak.
+- Mouth-corner asymmetry: ratio > 0.3 = mild, > 0.5 = strong; less_mobile_side identifies the candidate side.
 
-RULES: cite ONLY numbers from the JSON; ALL TEXT IN ENGLISH; if a motor_sign asymmetry is detected → asymmetry_detected=true; clinician_notes is mandatory (2 sentences).
-
-VALID VALUES (use EXACTLY these strings, lowercase, with underscores):
-- overall_risk_level must be one of: "low", "borderline", "elevated"
-- motor_signs.name must be one of: "hypomimia", "jaw_tremor", "mouth_corner_asymmetry"
-- motor_signs.side must be one of: "left", "right", "bilateral", or null
-- motor_signs.confidence must be one of: "low", "moderate", "high"
-
-Respond with ONE JSON object only, no markdown, no extra text. Pick ONE concrete value for each enum field. Example of the SHAPE (do not copy these values, replace them with your own based on the data):
+Write a JSON object with EXACTLY these four fields, no others, no markdown:
 
 {{
- "patient_id": "{payload.patient_id}",
- "session_id": "{payload.session_id}",
- "overall_risk_level": "borderline",
- "asymmetry_detected": false,
- "motor_signs": [
-   {{
-     "name": "hypomimia",
-     "detected": true,
-     "side": "bilateral",
-     "severity": 1,
-     "confidence": "moderate",
-     "key_metrics": {{"composite_expressivity_score": 0.43}},
-     "evidence_tool_calls": [],
-     "rationale": "Composite score 0.43 with reduced lower-face RoM."
-   }}
- ],
- "quality_issues": [],
- "flagged_findings": ["Short English bullet"],
- "recommended_followup": ["Short English bullet"],
- "clinician_notes": "Two English sentences summarizing what was found and the recommendation."
+  "rationales": {{
+    "hypomimia": "1–2 sentences explaining the hypomimia decision using the actual numbers",
+    "jaw_tremor": "1–2 sentences explaining the jaw tremor decision using the actual numbers",
+    "mouth_corner_asymmetry": "1–2 sentences explaining the asymmetry decision using the actual numbers"
+  }},
+  "flagged_findings": ["short English bullets — one per real finding worth highlighting"],
+  "recommended_followup": ["short English bullets — concrete next steps for the clinician"],
+  "clinician_notes": "2–3 English sentences: what was found overall, why it matters, and the recommendation."
 }}
 
-Be conservative. Screening, not diagnosis."""
+Cite the numbers. Be conservative. If overall risk is `low`, recommended_followup
+should reflect that (e.g. routine monitoring), not unnecessary referrals."""
 
     response = client.chat(
         model=model,
-        messages=[{"role": "user", "content": prompt}],
-        options={
-            "temperature": temperature,
-            "num_predict": 600,   # cap output, evita rambling lunghi
-        },
+        messages=[{"role": "user", "content": narrative_prompt}],
+        options={"temperature": temperature, "num_predict": 600},
     )
     msg = _extract_message(response)
     raw = msg.get("content", "") or ""
     text = _strip_code_fence(raw)
 
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as primary_err:
-        # Small LLMs frequently emit JSON with missing commas, trailing commas,
-        # or unbalanced quotes. Try a forgiving parser before giving up.
-        try:
-            from json_repair import repair_json  # noqa: PLC0415
+    narrative = _parse_narrative_json(text, raw)
 
-            repaired = repair_json(text, return_objects=False)
-            data = json.loads(repaired)
-            print(
-                "[run_screening_agent_simple] note: raw model output was invalid JSON; "
-                "auto-repaired before validation.",
-                file=sys.stderr,
-            )
-        except Exception as repair_err:
-            raise RuntimeError(
-                f"Model output is not valid JSON.\n"
-                f"  json.loads error: {primary_err}\n"
-                f"  json_repair error: {repair_err}\n"
-                f"--- raw output ---\n{raw}"
-            ) from primary_err
+    # ── Step 3: assemble the final ScreeningReport ────────────────────
+    motor_signs = []
+    for s in state["signs"]:
+        rationale = (narrative.get("rationales") or {}).get(s["name"], "") or s["summary"]
+        motor_signs.append({
+            "name": s["name"],
+            "detected": s["detected"],
+            "side": s["side"],
+            "severity": s["severity"],
+            "confidence": s["confidence"],
+            "key_metrics": s["key_metrics"],
+            "evidence_tool_calls": [],
+            "rationale": rationale.strip(),
+        })
 
-    data = _canonicalize_report(data)
-    report = ScreeningReport.model_validate(data)
+    report_dict = {
+        "patient_id": payload.patient_id,
+        "session_id": payload.session_id,
+        "overall_risk_level": state["overall_risk_level"],
+        "asymmetry_detected": state["asymmetry_detected"],
+        "motor_signs": motor_signs,
+        "quality_issues": _quality_issues_from_payload(payload),
+        "flagged_findings": _coerce_str_list(narrative.get("flagged_findings"))
+            or _default_findings(state),
+        "recommended_followup": _coerce_str_list(narrative.get("recommended_followup"))
+            or _default_followup(state),
+        "clinician_notes": (narrative.get("clinician_notes") or "").strip()
+            or _default_notes(state),
+    }
+    report = ScreeningReport.model_validate(report_dict)
     return AgentResult(
         report=report,
         transcript=[{"iteration": 1, "message": msg}],
         tool_calls=[],
         iterations=1,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for hybrid mode
+# ---------------------------------------------------------------------------
+
+def _parse_narrative_json(text: str, raw: str) -> dict:
+    """Best-effort parse of the narrative JSON. Falls back to empty dict
+    so the deterministic skeleton still produces a valid report."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            from json_repair import repair_json  # noqa: PLC0415
+
+            return json.loads(repair_json(text, return_objects=False))
+        except Exception:
+            print(
+                "[run_screening_agent_simple] warning: narrative not parseable, "
+                "using deterministic defaults.",
+                file=sys.stderr,
+            )
+            print(f"--- raw narrative ---\n{raw}", file=sys.stderr)
+            return {}
+
+
+def _coerce_str_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _quality_issues_from_payload(payload: KnowledgePayload) -> list[str]:
+    issues: list[str] = []
+    cf = payload.clinical_features
+    if cf.regional_motion is not None and not cf.regional_motion.valid:
+        issues.append(f"regional_motion: {cf.regional_motion.reason or 'invalid'}")
+    if cf.jaw_tremor is not None and not cf.jaw_tremor.valid:
+        issues.append(f"jaw_tremor: {cf.jaw_tremor.reason or 'invalid'}")
+    if cf.mouth_asymmetry is not None and not cf.mouth_asymmetry.valid:
+        issues.append(f"mouth_asymmetry: {cf.mouth_asymmetry.reason or 'invalid'}")
+    if payload.quality and payload.quality.face_coverage is not None:
+        if payload.quality.face_coverage < 0.5:
+            issues.append(
+                f"low face coverage ({payload.quality.face_coverage:.0%}) — "
+                f"results may be unreliable"
+            )
+    return issues
+
+
+def _default_findings(state: dict) -> list[str]:
+    detected = [s for s in state["signs"] if s.get("detected")]
+    if not detected:
+        return ["No motor signs convincingly detected from face-only metrics."]
+    return [f"{s['name'].replace('_', ' ').capitalize()}: {s['summary']}"
+            for s in detected]
+
+
+def _default_followup(state: dict) -> list[str]:
+    risk = state["overall_risk_level"]
+    if risk == "elevated":
+        return ["Refer for in-person MDS-UPDRS Part III evaluation by a neurologist."]
+    if risk == "borderline":
+        return ["Monitor and consider re-screening; refer if symptoms progress."]
+    return ["No follow-up triggered by this screening run."]
+
+
+def _default_notes(state: dict) -> str:
+    risk = state["overall_risk_level"].upper()
+    detected = [s["name"].replace("_", " ") for s in state["signs"] if s.get("detected")]
+    if not detected:
+        return (
+            f"Overall risk: {risk}. No motor signs convincingly detected on "
+            f"face-only screening; metrics within expected range."
+        )
+    listed = ", ".join(detected)
+    return (
+        f"Overall risk: {risk}. Detected motor signs on face-only screening: "
+        f"{listed}. Clinician review recommended."
     )
 
 

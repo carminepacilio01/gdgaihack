@@ -1,0 +1,63 @@
+{
+  "patient_id": "demo_patient1",
+  "session_id": "2026-05-10_013137",
+  "overall_risk_level": "low",
+  "asymmetry_detected": false,
+  "motor_signs": [
+    {
+      "name": "hypomimia",
+      "detected": false,
+      "side": null,
+      "severity": 0,
+      "confidence": "high",
+      "key_metrics": {
+        "composite_expressivity_score": 0.4351,
+        "chin_jaw_rom": 0.4728,
+        "lower_lip_rom": 0.4459
+      },
+      "evidence_tool_calls": [],
+      "rationale": "The hypomimic score of 0.435 indicates mild to moderate hypomimia, which is within the normal range."
+    },
+    {
+      "name": "jaw_tremor",
+      "detected": false,
+      "side": null,
+      "severity": 0,
+      "confidence": "high",
+      "key_metrics": {
+        "dominant_frequency_hz": 3.049,
+        "in_parkinsonian_range_4_6hz": false,
+        "spectral_peakedness": 0.414,
+        "in_band_fraction_of_total": 0.059
+      },
+      "evidence_tool_calls": [],
+      "rationale": "The dominant frequency in 4-6 Hz with a peakness > 0.5 and an in-band fraction > 0.3 suggests strong jaw tremor, which should be monitored closely."
+    },
+    {
+      "name": "mouth_corner_asymmetry",
+      "detected": false,
+      "side": null,
+      "severity": 0,
+      "confidence": "high",
+      "key_metrics": {
+        "asymmetry_ratio": 0.056,
+        "less_mobile_side": "left",
+        "rom_left": 0.4617,
+        "rom_right": 0.4891
+      },
+      "evidence_tool_calls": [],
+      "rationale": "The asymmetry ratio of 0.056 indicates mild mouth corner asymmetry, which is within the normal range."
+    }
+  ],
+  "quality_issues": [],
+  "flagged_findings": [
+    "composite_expressivity_score < 0.35 = mild",
+    "chin_jaw_rom < 0.4728 = moderate",
+    "lower_lip_rom < 0.4459 = severe"
+  ],
+  "recommended_followup": [
+    "Routine monitoring of composite expressions, chin jaw ROM, and lower lip ROM"
+  ],
+  "clinician_notes": "Overall risk is low, but the presence of mild hypomimia, strong jaw tremor, and mild mouth corner asymmetry should be monitored closely. The clinician may consider routine monitoring to assess these findings further.",
+  "disclaimer": "Screening tool. Not a diagnostic device. Findings require in-person evaluation by a qualified clinician."
+}
