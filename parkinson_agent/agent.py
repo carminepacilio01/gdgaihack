@@ -116,6 +116,123 @@ def _extract_message(response: Any) -> dict:
     return msg
 
 
+def _strip_code_fence(text: str) -> str:
+    """Strip markdown fences from a model's text response."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```", 2)[1]
+        if text.startswith("json"):
+            text = text[4:]
+        if text.endswith("```"):
+            text = text[: -3]
+        text = text.strip()
+    # Crop to the outermost JSON object so trailing commentary doesn't break parsing.
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        text = text[start : end + 1]
+    return text
+
+
+def run_screening_agent_simple(
+    payload: KnowledgePayload,
+    *,
+    client: Any = None,
+    model: str | None = None,
+    temperature: float = 0.0,
+) -> AgentResult:
+    """One-shot agent: no tool-use, single LLM call, JSON-in-text response.
+
+    Designed for small local models (≤1.5B) where forcing complex JSON
+    Schema enforcement via tool-use causes hangs. The full payload is
+    inlined in the prompt and the model is asked to return a single JSON
+    object matching `ScreeningReport`. Validation is done client-side.
+    """
+    if client is None:
+        client = _default_client()
+    if model is None:
+        model = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
+
+    knowledge = json.dumps(payload.model_dump(exclude_none=True), indent=2)
+    prompt = f"""You are a clinical screening assistant for early Parkinson's disease.
+
+The upstream model produced this knowledge JSON for the patient:
+
+{knowledge}
+
+REGIONAL WEIGHTS (clinical priors): chin/jaw=HIGH(1.0), lower_lip=HIGH(1.0), \
+upper_lip=MID(0.6), mouth_corners=MID(0.6), cheeks=LOW-MID(0.4). Eyelids and \
+neck are NOT measured — never assert blink rate or eyelid hypokinesia.
+
+INTERPRET the metrics with MDS-UPDRS Part III:
+- 3.2 Hypomimia → composite_expressivity_score (lower = more hypomimic) and \
+chin/lower-lip RoM (HIGH-weight regions).
+- 3.17 Jaw rest tremor → jaw_tremor.dominant_frequency_hz, especially when \
+in_parkinsonian_range_4_6hz is true and spectral_peakedness is high.
+- Mouth-corner asymmetry → mouth_asymmetry.asymmetry_ratio > 0.3 with a \
+clearly less_mobile_side suggests unilateral PD onset.
+- model_inference.pd_probability (if present) is supportive — combine, \
+don't override clinical reasoning.
+
+OVERALL RISK:
+- low: no convincing motor signs.
+- borderline: one weak/ambiguous sign or quality issues.
+- elevated: at least one strong sign (e.g. composite clearly reduced AND \
+in-band jaw tremor) or convergent signs.
+
+OUTPUT exactly one JSON object, no markdown, no commentary, with this shape:
+
+{{
+  "patient_id": "{payload.patient_id}",
+  "session_id": "{payload.session_id}",
+  "overall_risk_level": "low" | "borderline" | "elevated",
+  "asymmetry_detected": true | false,
+  "motor_signs": [
+    {{
+      "name": "hypomimia" | "jaw_tremor" | "mouth_corner_asymmetry" | \
+"reduced_blink_rate" | "eyelid_reduced_motion",
+      "detected": true | false,
+      "side": "left" | "right" | "bilateral" | null,
+      "severity": 0 | 1 | 2 | 3 | 4 | null,
+      "confidence": "low" | "moderate" | "high",
+      "key_metrics": {{}},
+      "evidence_tool_calls": [],
+      "rationale": "one or two sentences"
+    }}
+  ],
+  "quality_issues": [],
+  "flagged_findings": ["short bullets for the clinician"],
+  "recommended_followup": ["short bullets"],
+  "clinician_notes": "concise 15-second read"
+}}
+
+Be conservative. Output ONLY the JSON object."""
+
+    response = client.chat(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        options={"temperature": temperature},
+    )
+    msg = _extract_message(response)
+    raw = msg.get("content", "") or ""
+    text = _strip_code_fence(raw)
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Model output is not valid JSON: {exc}\n--- raw output ---\n{raw}"
+        )
+
+    report = ScreeningReport.model_validate(data)
+    return AgentResult(
+        report=report,
+        transcript=[{"iteration": 1, "message": msg}],
+        tool_calls=[],
+        iterations=1,
+    )
+
+
 def _tool_call_args(tc: Any) -> tuple[str, dict]:
     """Extract (name, arguments) from a tool_call entry."""
     fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", {})

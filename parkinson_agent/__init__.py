@@ -1,6 +1,6 @@
 """Agentic Parkinson's screening backend — reads data.json, returns a clinician report."""
 
-from .agent import AgentResult, run_screening_agent
+from .agent import AgentResult, run_screening_agent, run_screening_agent_simple
 from .input_schema import (
     ClinicalFeatures,
     JawTremor,
@@ -31,4 +31,5 @@ __all__ = [
     "ScreeningReport",
     "SignName",
     "run_screening_agent",
+    "run_screening_agent_simple",
 ]
