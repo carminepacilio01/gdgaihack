@@ -1,4 +1,4 @@
-# Parkinson Face Screening Agent
+# ParC
 
 Local agentic pipeline that turns a patient's face capture into a
 structured screening report for the clinician — no cloud, no API keys,
